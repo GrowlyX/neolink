@@ -21,7 +21,7 @@ A native display manager for macOS, written in Rust. Neolink brings display arra
 - Change display modes, choose the main display, mirror screens, and save or tidy a layout.
 - Create and configure virtual displays, including resolution, HiDPI backing, and rotation.
 - View DisplayLink device details and adjust brightness, contrast, and enable/flip state when the vendor agent is available.
-- Fetch the official DisplayLink package on demand, and optionally install it. Neolink does not bundle Synaptics software or firmware, and downloading needs no administrator password.
+- Fetch the official DisplayLink package on demand. Neolink does not bundle Synaptics software or firmware, and downloading it needs no administrator password.
 - Set the app appearance, configure launch at login, and open macOS privacy settings for Screen Recording and Accessibility.
 
 Monitor maker marks are shown when the connected display name matches a known brand. Neolink uses the [Feather](https://github.com/feathericons/feather) icon set and Geist typeface.
@@ -32,12 +32,16 @@ Neolink requires macOS 14 or newer. Download `Neolink_<version>_macos.dmg` from 
 
 On first launch a setup assistant walks through the rest: it downloads the official DisplayLink Manager from Synaptics and verifies it against a pinned SHA-256, then covers the optional privacy permissions and open-at-login. Every step can be skipped, and the assistant can be run again from **Settings › Setup**.
 
-**Downloading is enough for everything Neolink does itself.** Virtual displays, arrangement, modes, HiDPI, rotation and the refresh-rate picker are plain CoreGraphics, and the one thing Neolink reads from Synaptics — the per-dock EDID and firmware packs — comes out of the expanded download. No administrator password and no running vendor agent are involved.
-
-**Installing the vendor agent is optional**, and only needed for DisplayLink's own per-dock controls (brightness, contrast, flip, enable). That step is the one that prompts for an administrator password. Do it from **Settings › DisplayLink**, or use the CLI:
+**Downloading is all Neolink needs.** Virtual displays, arrangement, modes, HiDPI, rotation and the refresh-rate picker are plain CoreGraphics, and the one thing Neolink reads from Synaptics — the per-dock EDID and firmware packs — comes out of the expanded download. No administrator password and no running vendor agent are involved, and the app never installs the vendor package.
 
 ```sh
 neolinkctl vendor download   # fetch, verify and expand: no admin prompt
+neolinkctl vendor status     # pin, cache state and size
+```
+
+For DisplayLink's own per-dock controls (brightness, contrast, flip, enable) the vendor agent still has to be installed and running; that is the one step that prompts for an administrator password:
+
+```sh
 neolinkctl vendor install    # optional: hand the dock to Synaptics' driver
 neolinkctl vendor provision  # download, then install
 ```
@@ -77,7 +81,7 @@ NEOLINK_DEMO=1 cargo run -p neolink
 | Crate | Responsibility |
 | --- | --- |
 | `neolink-app` | GPUI app: settings, display arrangement canvas, inspector, and user actions |
-| `neolink-core` | CoreGraphics display management, virtual screens, layout persistence, vendor agent/XPC, USB transport, and on-demand package installer |
+| `neolink-core` | CoreGraphics display management, virtual screens, layout persistence, vendor agent/XPC, USB transport, and on-demand package download |
 
 Useful source areas:
 
@@ -89,7 +93,7 @@ crates/neolink-core/src/virtual_display.rs  CGVirtualDisplay engine
 crates/neolink-core/src/layout.rs       Layout profiles and persistence
 crates/neolink-core/src/agent.rs        Vendor agent supervision and XPC
 crates/neolink-core/src/transport.rs    DL3 USB transport
-crates/neolink-core/src/vendor.rs       Pinned package fetch, verify, and install
+crates/neolink-core/src/vendor.rs       Pinned package fetch, verify, expand (and optional install)
 ```
 
 ## Brand assets

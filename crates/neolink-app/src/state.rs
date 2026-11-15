@@ -149,22 +149,14 @@ impl AppState {
         }
     }
 
-    /// Fetch, verify and install the pinned vendor package, off the UI thread. `installer` prompts
-    /// for an admin password on the main queue, so the app must not block while it does.
-    pub fn provision(&mut self) {
-        self.acquire_vendor(true);
-    }
-
-    /// Fetch, verify and expand the pinned package without an administrator prompt.
+    /// Fetch, verify and expand the pinned package, off the UI thread, with no administrator
+    /// prompt.
     ///
-    /// This is all Neolink itself needs: the expanded payload carries the per-dock EDID and
-    /// firmware packs, and nothing here touches the vendor agent or its XPC service. Installing
-    /// is only required to hand the dock to Synaptics' own driver.
+    /// This is all Neolink needs: the expanded payload carries the per-dock EDID and firmware
+    /// packs, and nothing here touches the vendor agent or its XPC service. The app never
+    /// installs the vendor package; `neolinkctl vendor install` still does, for anyone who wants
+    /// Synaptics' own dock controls.
     pub fn download_vendor(&mut self) {
-        self.acquire_vendor(false);
-    }
-
-    fn acquire_vendor(&mut self, install: bool) {
         if self.busy() {
             return;
         }
@@ -200,44 +192,21 @@ impl AppState {
                     }
                     vendor::Stage::Verify => "Verifying checksum…".into(),
                     vendor::Stage::Expand => "Expanding package…".into(),
-                    vendor::Stage::Install => "Installing (admin password required)…".into(),
+                    vendor::Stage::Install => "Installing…".into(),
                 };
                 if let Ok(mut s) = slot.lock() {
                     *s = Some(text);
                 }
             };
-            let result = if install {
-                vendor::provision(&mut report)
-            } else {
-                vendor::expand(&mut report).map(|_| ())
-            };
+            let result = vendor::expand(&mut report).map(|_| ());
             let text = match result {
-                Ok(()) if install => {
-                    let _ = neolink_core::agent::start();
-                    agent::invalidate();
-                    set_phase(&phase, VendorPhase::Done);
-                    format!("DisplayLink {} installed and started", vendor::VERSION)
-                }
                 Ok(()) => {
-                    // Downloaded and expanded only: no agent start, no admin prompt.
                     set_phase(&phase, VendorPhase::Done);
-                    format!(
-                        "DisplayLink {} downloaded. Install it later for vendor controls.",
-                        vendor::VERSION
-                    )
+                    format!("DisplayLink {} downloaded", vendor::VERSION)
                 }
                 Err(e) => {
-                    let failure = if install {
-                        friendly_install_error(&e)
-                    } else {
-                        friendly_download_error(&e)
-                    };
-                    set_phase(&phase, VendorPhase::Failed(failure));
-                    if install {
-                        format!("Install failed: {e}")
-                    } else {
-                        format!("Download failed: {e}")
-                    }
+                    set_phase(&phase, VendorPhase::Failed(friendly_download_error(&e)));
+                    format!("Download failed: {e}")
                 }
             };
             if let Ok(mut s) = slot.lock() {
@@ -887,19 +856,5 @@ fn friendly_download_error(e: &anyhow::Error) -> String {
         "Could not reach synaptics.com. Check your connection and try again.".into()
     } else {
         text
-    }
-}
-
-/// `osascript` reports a cancelled password prompt as error -128; say that in words.
-fn friendly_install_error(e: &anyhow::Error) -> String {
-    let text = format!("{e}");
-    if text.contains("-128") || text.contains("User canceled") {
-        "The administrator prompt was cancelled. Nothing was installed.".into()
-    } else if text.contains("checksum mismatch") {
-        "The download did not match the pinned checksum, so it was discarded.".into()
-    } else if text.contains("download failed") {
-        "Could not reach synaptics.com. Check your connection and try again.".into()
-    } else {
-        text.lines().next().unwrap_or("Install failed").to_string()
     }
 }

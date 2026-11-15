@@ -18,6 +18,7 @@ use gpui::{
     div, point, prelude::*, px, size, svg, App, Application, AssetSource, Bounds, Context,
     SharedString, Window, WindowAppearance, WindowBounds, WindowOptions,
 };
+use neolink_core::vendor;
 use state::AppState;
 
 struct Neolink {
@@ -171,23 +172,14 @@ impl Neolink {
     }
 
     fn displaylink_label(&self) -> String {
-        let agent = &self.state.agent;
-        if agent.installed {
-            match (&agent.version, agent.running) {
-                (Some(v), true) => format!("DisplayLink {v}"),
-                (Some(v), false) => format!("DisplayLink {v} stopped"),
-                (None, true) => "DisplayLink".into(),
-                (None, false) => "DisplayLink stopped".into(),
-            }
-        } else if self.state.vendor_downloaded {
-            "DisplayLink package".into()
+        if self.state.vendor_downloaded {
+            format!("DisplayLink {} package", vendor::VERSION)
         } else {
-            "No DisplayLink driver".into()
+            "No DisplayLink package".into()
         }
     }
 
     fn workspace_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let agent = &self.state.agent;
         let busy = self.state.busy();
         div()
             .flex()
@@ -219,31 +211,17 @@ impl Neolink {
                     }),
                 ),
             )
-            .children((agent.installed && !agent.running).then(|| {
-                ui::button("start-agent", "Start agent", ui::ButtonKind::Secondary, true).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        this.state.status = match neolink_core::agent::start() {
-                            Ok(()) => "DisplayLink agent started.".into(),
-                            Err(e) => format!("{e}"),
-                        };
-                        this.state.refresh();
-                        cx.notify();
-                    }),
-                )
-            }))
             .child(
                 ui::button(
-                    "btn-install",
+                    "btn-download",
                     if busy {
                         "Downloading…"
-                    } else if agent.installed {
-                        "Reinstall DisplayLink"
                     } else if self.state.vendor_downloaded {
-                        "Install DisplayLink"
+                        "Re-download DisplayLink"
                     } else {
                         "Get DisplayLink"
                     },
-                    if agent.installed {
+                    if self.state.vendor_downloaded {
                         ui::ButtonKind::Secondary
                     } else {
                         ui::ButtonKind::Primary
@@ -252,14 +230,7 @@ impl Neolink {
                 )
                 .when(!busy, |el| {
                     el.on_click(cx.listener(|this, _, _, cx| {
-                        // Downloading needs no administrator password, so it is the default.
-                        // The install (which does prompt) is the explicit second press, or the
-                        // dedicated button in Settings.
-                        if this.state.vendor_downloaded && !this.state.agent.installed {
-                            this.state.provision();
-                        } else {
-                            this.state.download_vendor();
-                        }
+                        this.state.download_vendor();
                         cx.notify();
                     }))
                 }),
@@ -346,8 +317,6 @@ impl Neolink {
     fn settings_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let accessibility_ok = accessibility_allowed();
         let screen_ok = self.state.capture_allowed;
-        let agent = &self.state.agent;
-        let busy = self.state.busy();
         let row = |title: &'static str, detail: String| {
             div()
                 .flex()
@@ -446,54 +415,25 @@ impl Neolink {
             .child(theme::styled(&theme::text::LABEL, "DisplayLink"))
             .child(
                 row(
-                    "Driver",
-                    if agent.installed {
-                        format!(
-                            "{} {}",
-                            self.displaylink_label(),
-                            if agent.running { "is running." } else { "is installed." }
-                        )
-                    } else if self.state.vendor_downloaded {
-                        "Downloaded. Only DisplayLink's own dock controls need it installed."
-                            .into()
+                    "DisplayLink package",
+                    if self.state.vendor_downloaded {
+                        "Downloaded. Supplies the per-dock EDID and firmware data.".into()
                     } else {
                         "Not downloaded. Virtual displays work without it.".into()
                     },
                 )
                 .child(ui::badge(
-                    if agent.installed {
-                        "Installed"
-                    } else if self.state.vendor_downloaded {
+                    if self.state.vendor_downloaded {
                         "Downloaded"
                     } else {
                         "Not downloaded"
                     },
-                    if agent.installed {
+                    if self.state.vendor_downloaded {
                         ui::BadgeKind::Strong
                     } else {
                         ui::BadgeKind::Neutral
                     },
                 )),
-            )
-            .when(
-                self.state.vendor_downloaded && !agent.installed,
-                |d| {
-                    // Downloading is enough for us; this is the optional admin-prompt step.
-                    d.child(
-                        row(
-                            "Vendor controls",
-                            "Brightness, contrast, flip and enable come from the vendor agent."
-                                .into(),
-                        )
-                        .child(
-                            ui::button("btn-install-vendor", "Install", ui::ButtonKind::Secondary, !busy)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.state.provision();
-                                    cx.notify();
-                                })),
-                        ),
-                    )
-                },
             )
             .child(ui::divider())
             .child(theme::styled(&theme::text::LABEL, "Permissions"))

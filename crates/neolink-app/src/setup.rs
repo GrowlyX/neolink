@@ -285,7 +285,7 @@ impl crate::Neolink {
     pub(crate) fn setup_overlay(&self, step: Step, cx: &mut Context<Self>) -> impl IntoElement {
         let body: gpui::AnyElement = match step {
             Step::Welcome => self.setup_welcome().into_any_element(),
-            Step::Driver => self.setup_driver(cx).into_any_element(),
+            Step::Driver => self.setup_driver().into_any_element(),
             Step::Permissions => self.setup_permissions(cx).into_any_element(),
             Step::Preferences => self.setup_preferences(cx).into_any_element(),
             Step::Done => self.setup_done().into_any_element(),
@@ -384,8 +384,6 @@ impl crate::Neolink {
             Step::Driver => match phase {
                 VendorPhase::Working { .. } => ("Downloading…".into(), false),
                 VendorPhase::Failed(_) => ("Try again".into(), true),
-                // Downloaded is enough for everything Neolink does on its own; installing is
-                // only needed for the vendor's own controls on a physical dock.
                 VendorPhase::Done => ("Continue".into(), true),
                 _ if downloaded => ("Continue".into(), true),
                 _ => ("Download package".into(), true),
@@ -403,18 +401,6 @@ impl crate::Neolink {
                 ghost("setup-driver-skip", "Skip for now").on_click(cx.listener(
                     |this, _, _, cx| {
                         this.setup = Some(Step::Permissions);
-                        cx.notify();
-                    },
-                )),
-            );
-        }
-        // Installing is optional: it is the only step that needs an administrator password, and
-        // only the vendor's own dock controls depend on it.
-        if step == Step::Driver && downloaded && !busy {
-            right = right.child(
-                ghost("setup-driver-install", "Install with admin prompt").on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.state.provision();
                         cx.notify();
                     },
                 )),
@@ -485,7 +471,7 @@ impl crate::Neolink {
             (
                 "icons/download.svg",
                 "Download the DisplayLink package",
-                "Checked against a pinned fingerprint. Installing it is optional.",
+                "Checked against a pinned fingerprint before it is used.",
             ),
             (
                 "icons/shield.svg",
@@ -547,9 +533,8 @@ impl crate::Neolink {
             .child(list)
     }
 
-    fn setup_driver(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn setup_driver(&self) -> impl IntoElement {
         let phase = self.state.vendor_phase();
-        let agent = &self.state.agent;
         let (version, digest) = vendor::pinned();
 
         let package = well()
@@ -601,13 +586,6 @@ impl crate::Neolink {
                     })
                     .child(line("Verify checksum", 1, None))
                     .child(line("Unpack", 2, None))
-                    .when(rank == 3, |d| {
-                        d.child(line(
-                            "Install",
-                            3,
-                            Some("Waiting for administrator approval".to_string()),
-                        ))
-                    })
                     .into_any_element()
             }
             VendorPhase::Failed(msg) => div()
@@ -620,11 +598,11 @@ impl crate::Neolink {
                 .border_1()
                 .border_color(mono::line())
                 .child(icon("icons/alert-circle.svg", 16.0, mono::ink()))
-                .child(row_text("Install did not finish", msg.clone()))
+                .child(row_text("Download did not finish", msg.clone()))
                 .into_any_element(),
-            _ if self.state.vendor_downloaded && !agent.installed => {
-                // Enough for virtual displays, arrangement and our own USB transport. The vendor
-                // agent is only needed for its own per-dock controls.
+            _ if self.state.vendor_downloaded => {
+                // Supplies the per-dock EDID and firmware data. No install, no agent, no
+                // administrator password.
                 let fresh = phase == VendorPhase::Done;
                 div()
                     .flex()
@@ -643,8 +621,8 @@ impl crate::Neolink {
                             .child(icon("icons/check.svg", 16.0, mono::ink()))
                             .child(row_text(
                                 format!("DisplayLink Manager {version} downloaded"),
-                                "Virtual displays and arrangement work now. Installing is \
-                                 optional; only brightness, contrast and flip need the agent.",
+                                "Verified and ready. Supplies the per-dock EDID and firmware \
+                                 data Neolink reads.",
                             )),
                     )
                     .when(fresh, |d| {
@@ -653,82 +631,7 @@ impl crate::Neolink {
                                 .text_size(px(12.0))
                                 .line_height(px(18.0))
                                 .text_color(mono::faint())
-                                .child("Install it any time from Settings › DisplayLink."),
-                        )
-                    })
-                    .into_any_element()
-            }
-            _ if agent.installed => {
-                let v = agent.version.clone().unwrap_or_else(|| version.to_string());
-                let fresh = phase == VendorPhase::Done;
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(10.0))
-                            .px(px(14.0))
-                            .py(px(12.0))
-                            .rounded(px(12.0))
-                            .border_1()
-                            .border_color(mono::line())
-                            .child(icon("icons/check.svg", 16.0, mono::ink()))
-                            .child(row_text(
-                                format!("DisplayLink Manager {v} is installed"),
-                                if agent.running {
-                                    "The DisplayLink agent is running."
-                                } else {
-                                    "The DisplayLink agent is not running yet."
-                                },
-                            ))
-                            .when(!agent.running, |d| {
-                                d.child(
-                                    ui::button(
-                                        "setup-start-agent",
-                                        "Start agent",
-                                        ui::ButtonKind::Secondary,
-                                        true,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| {
-                                            let _ = neolink_core::agent::start();
-                                            neolink_core::agent::invalidate();
-                                            this.state.refresh();
-                                            cx.notify();
-                                        },
-                                    )),
-                                )
-                            }),
-                    )
-                    .when(fresh, |d| {
-                        d.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(10.0))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .text_size(px(12.0))
-                                        .line_height(px(18.0))
-                                        .text_color(mono::faint())
-                                        .child(
-                                            "If macOS asks to allow DisplayLink, approve it in \
-                                             System Settings › Privacy & Security.",
-                                        ),
-                                )
-                                .child(
-                                    ui::button(
-                                        "setup-open-privacy",
-                                        "Open",
-                                        ui::ButtonKind::Secondary,
-                                        true,
-                                    )
-                                    .on_click(|_, _, _| open_settings_pane("General")),
-                                ),
+                                .child("You can re-download it any time from Settings."),
                         )
                     })
                     .into_any_element()
@@ -738,8 +641,8 @@ impl crate::Neolink {
                 .line_height(px(18.0))
                 .text_color(mono::faint())
                 .child(
-                    "Downloading is unmetered and needs no password. Installing is optional and \
-                     only needed for DisplayLink's own dock controls.",
+                    "Downloading is unmetered and needs no password. Neolink reads the per-dock \
+                     EDID and firmware data out of this package.",
                 )
                 .into_any_element(),
         };
@@ -751,10 +654,10 @@ impl crate::Neolink {
             .child(self.heading(
                 "icons/download.svg",
                 mono::ink(),
-                "DisplayLink driver",
+                "DisplayLink package",
                 "Neolink doesn't bundle Synaptics' software. It downloads the official \
-                 package and checks it against a pinned fingerprint. Downloading is enough; \
-                 installing is optional and only needed for DisplayLink's dock controls.",
+                 package and checks it against a pinned fingerprint. That is all Neolink \
+                 needs: the per-dock EDID and firmware data lives inside it.",
             ))
             // While installing, the timeline replaces the package card.
             .when(!matches!(phase, VendorPhase::Working { .. }), |d| {
@@ -909,19 +812,15 @@ impl crate::Neolink {
     }
 
     fn setup_done(&self) -> impl IntoElement {
-        let agent = &self.state.agent;
         let rows: [(&'static str, String, bool); 4] = [
             (
-                "DisplayLink driver",
-                match (&agent.version, agent.installed) {
-                    (Some(v), true) => format!("Installed ({v})"),
-                    (None, true) => "Installed".into(),
-                    _ if self.state.vendor_downloaded => {
-                        format!("Downloaded ({})", vendor::VERSION)
-                    }
-                    _ => "Skipped. Download later with Get DisplayLink.".into(),
+                "DisplayLink package",
+                if self.state.vendor_downloaded {
+                    format!("Downloaded ({})", vendor::VERSION)
+                } else {
+                    "Skipped. Download later with Get DisplayLink.".into()
                 },
-                self.state.vendor_downloaded || agent.installed,
+                self.state.vendor_downloaded,
             ),
             (
                 "Screen Recording",
