@@ -37,6 +37,9 @@ jobs:
       - run: scripts/bundle.sh --release
       - name: zip the bundle
         run: ditto -c -k --keepParent target/release/Neolink.app "Neolink_${GITHUB_REF_NAME#v}_macos.zip"
+      # Drag-to-Applications image; the app's first-run assistant provisions DisplayLink.
+      - name: build the disk image
+        run: scripts/dmg.sh --skip-build --out "Neolink_${GITHUB_REF_NAME#v}_macos.dmg"
       - name: publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -44,4 +47,6 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
+            "Neolink_${GITHUB_REF_NAME#v}_macos.dmg" \
+            "Neolink_${GITHUB_REF_NAME#v}_macos.dmg.sha256" \
             "Neolink_${GITHUB_REF_NAME#v}_macos.zip"

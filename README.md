@@ -28,9 +28,11 @@ Monitor maker marks are shown when the connected display name matches a known br
 
 ## Install
 
-Neolink requires macOS 14 or newer. Download the latest app bundle from [GitHub Releases](https://github.com/GrowlyX/neolink/releases/latest). The bundle is universal and currently ad-hoc signed; macOS may require you to remove quarantine or approve the app in System Settings on first launch. See [Development](docs/DEVELOPMENT.md#releasing) for release signing details.
+Neolink requires macOS 14 or newer. Download `Neolink_<version>_macos.dmg` from [GitHub Releases](https://github.com/GrowlyX/neolink/releases/latest), open it, and drag Neolink into Applications. The app is universal and currently ad-hoc signed; macOS may require you to remove quarantine or approve the app in System Settings on first launch. See [Development](docs/DEVELOPMENT.md#releasing) for release signing details.
 
-A real DisplayLink dock may also need the vendor driver. You can install it from the app with **Get DisplayLink**, or use the CLI:
+On first launch a setup assistant walks through the rest: it downloads the official DisplayLink Manager from Synaptics, verifies it against a pinned SHA-256 and installs it (one administrator prompt), then covers the optional privacy permissions and open-at-login. Every step can be skipped, and the assistant can be run again from **Settings › Setup**.
+
+You can also install the vendor driver later from the app with **Get DisplayLink**, or use the CLI:
 
 ```sh
 neolinkctl vendor provision
@@ -46,11 +48,14 @@ Install the Xcode command-line tools, Rust toolchain, and the macOS SDK, then ru
 cargo run -p neolink
 ```
 
-Build the app bundle with:
+Build the app bundle, or the drag-to-install disk image, with:
 
 ```sh
 scripts/bundle.sh --release
 # target/release/Neolink.app
+
+scripts/dmg.sh
+# target/release/Neolink_<version>_macos.dmg
 ```
 
 For the development workflow, CI checks, and release process, see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).

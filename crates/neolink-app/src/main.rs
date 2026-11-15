@@ -6,6 +6,7 @@
 mod arrangement;
 mod devices;
 mod inspector;
+mod setup;
 mod state;
 mod theme;
 mod ui;
@@ -27,6 +28,8 @@ struct Neolink {
     /// Active drag on the arrangement canvas, if any.
     drag_anchor: Option<arrangement::Drag>,
     notify_rx: Option<std::sync::mpsc::Receiver<neolink_core::agent::Notification>>,
+    /// First-run setup assistant, when it is on screen.
+    setup: Option<setup::Step>,
 }
 
 impl Neolink {
@@ -42,6 +45,7 @@ impl Neolink {
             light_theme: load_theme_preference(),
             drag_anchor: None,
             notify_rx: subscribed.then_some(rx),
+            setup: setup::initial(),
         }
     }
 
@@ -108,6 +112,9 @@ impl Render for Neolink {
             .child(self.status_bar())
             .when(self.settings_open, |root| {
                 root.child(self.settings_panel(cx))
+            })
+            .when_some(self.setup, |root, step| {
+                root.child(self.setup_overlay(step, cx))
             })
     }
 }
@@ -323,6 +330,11 @@ impl Neolink {
                 .child(ui::pill("permission-accessibility", if accessibility_ok { "Granted" } else { "Open settings" }, accessibility_ok).on_click(cx.listener(move |_, _, _, _| {
                     if !accessibility_ok { let _ = std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").spawn(); }
                 }))))
+            .child(ui::divider())
+            .child(div().text_xs().text_color(theme::text_faint()).child("SETUP"))
+            .child(div().flex().items_center().justify_between()
+                .child(div().flex().flex_col().gap(px(3.0)).child(div().text_sm().child("Setup assistant")).child(div().text_xs().text_color(theme::text_faint()).child("Driver, permissions and startup, step by step.")))
+                .child(ui::pill("rerun-setup", "Run again", false).on_click(cx.listener(|this, _, _, cx| { this.settings_open = false; this.setup = Some(setup::Step::Welcome); cx.notify(); }))))
     }
 }
 
@@ -373,6 +385,16 @@ impl AssetSource for Assets {
         let bytes: Option<&'static [u8]> = match path {
             "logo/neolink-lockup.svg" => Some(include_bytes!("../assets/logo/neolink-lockup.svg")),
             "logo/settings.svg" => Some(include_bytes!("../assets/logo/settings.svg")),
+            "logo/neolink-mark.svg" => {
+                Some(include_bytes!("../assets/brand/neolink-mark-white.svg"))
+            }
+            "icons/alert-circle.svg" => Some(include_bytes!("../assets/icons/alert-circle.svg")),
+            "icons/check.svg" => Some(include_bytes!("../assets/icons/check.svg")),
+            "icons/chevron-left.svg" => Some(include_bytes!("../assets/icons/chevron-left.svg")),
+            "icons/download.svg" => Some(include_bytes!("../assets/icons/download.svg")),
+            "icons/monitor.svg" => Some(include_bytes!("../assets/icons/monitor.svg")),
+            "icons/power.svg" => Some(include_bytes!("../assets/icons/power.svg")),
+            "icons/shield.svg" => Some(include_bytes!("../assets/icons/shield.svg")),
             "brands/acer.svg" => Some(include_bytes!("../assets/brands/acer.svg")),
             "brands/aoc.svg" => Some(include_bytes!("../assets/brands/aoc.svg")),
             "brands/apple.svg" => Some(include_bytes!("../assets/brands/apple.svg")),
@@ -456,7 +478,11 @@ fn main() {
                                     // With a live notification stream a refresh is only needed for
                                     // structural changes; polling stays as the fallback.
                                     this.state.refresh_vendor();
-                                    if this.notify_rx.is_none() || notified || this.settings_open {
+                                    if this.notify_rx.is_none()
+                                        || notified
+                                        || this.settings_open
+                                        || this.setup.is_some()
+                                    {
                                         this.state.refresh();
                                         cx.notify();
                                     }

@@ -8,6 +8,9 @@ static LIGHT: AtomicBool = AtomicBool::new(false);
 pub fn set_light_mode(light: bool) {
     LIGHT.store(light, Ordering::Relaxed);
 }
+pub fn is_light() -> bool {
+    LIGHT.load(Ordering::Relaxed)
+}
 fn rgba(hex: u32, a: f32) -> Rgba {
     Rgba {
         r: ((hex >> 16) & 0xff) as f32 / 255.0,

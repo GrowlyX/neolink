@@ -23,6 +23,9 @@ pub const VERSION: &str = "17.1.56";
 pub const URL: &str = "https://www.synaptics.com/sites/default/files/exe_files/2026-11/DisplayLink%20Manager%20Graphics%20Connectivity17.1-EXE.pkg";
 /// SHA-256 of that exact file, measured 2026-11-14 (10,981,424 bytes).
 pub const SHA256: &str = "e6e8c86f722d05fc4b5bca22d9627df00dfd11dadffb472278b075fb5b66067e";
+/// Byte length of that file, so download progress has a real denominator even though curl
+/// is silent and the CDN may not send a length.
+pub const SIZE: u64 = 10_981_424;
 
 /// The pinned version and digest, for display in the UI.
 pub fn pinned() -> (&'static str, &'static str) {
@@ -177,7 +180,7 @@ pub fn fetch(progress: Progress) -> Result<PathBuf> {
                 let got = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
                 if got != last {
                     last = got;
-                    progress(Stage::Download, got, 0);
+                    progress(Stage::Download, got, SIZE.max(got));
                 }
                 std::thread::sleep(Duration::from_millis(150));
             }

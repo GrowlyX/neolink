@@ -91,6 +91,8 @@ pub struct AppState {
     pub vendor_progress: Arc<Mutex<Option<String>>>,
     /// Shared with the worker so it can clear the flag when it finishes.
     pub vendor_busy: Arc<AtomicBool>,
+    /// Structured view of the same install, for the setup assistant's progress bar.
+    pub vendor_phase: Arc<Mutex<VendorPhase>>,
     /// Mirrors the LaunchAgent on disk.
     pub launch_at_login: bool,
 }
@@ -111,6 +113,7 @@ impl AppState {
             vendor: vendor::status(),
             vendor_progress: Arc::new(Mutex::new(None)),
             vendor_busy: Arc::new(AtomicBool::new(false)),
+            vendor_phase: Arc::new(Mutex::new(VendorPhase::Idle)),
             launch_at_login: loginitem::enabled(),
         };
         state.refresh();
@@ -150,8 +153,18 @@ impl AppState {
         self.status = format!("Preparing DisplayLink {}…", vendor::VERSION);
         let slot = self.vendor_progress.clone();
         let busy = self.vendor_busy.clone();
+        let phase = self.vendor_phase.clone();
+        set_phase(
+            &phase,
+            VendorPhase::Working {
+                stage: vendor::Stage::Download,
+                done: 0,
+                total: vendor::SIZE,
+            },
+        );
         std::thread::spawn(move || {
             let mut report = |stage: vendor::Stage, done: u64, total: u64| {
+                set_phase(&phase, VendorPhase::Working { stage, done, total });
                 let text = match stage {
                     vendor::Stage::Download if total > 0 => {
                         format!(
@@ -178,9 +191,14 @@ impl AppState {
             let text = match result {
                 Ok(()) => {
                     let _ = neolink_core::agent::start();
+                    agent::invalidate();
+                    set_phase(&phase, VendorPhase::Done);
                     format!("DisplayLink {} installed and started", vendor::VERSION)
                 }
-                Err(e) => format!("Install failed: {e}"),
+                Err(e) => {
+                    set_phase(&phase, VendorPhase::Failed(friendly_install_error(&e)));
+                    format!("Install failed: {e}")
+                }
             };
             if let Ok(mut s) = slot.lock() {
                 *s = Some(text);
@@ -196,6 +214,13 @@ impl AppState {
             Err(e) => format!("Login item failed: {e}"),
         };
         self.launch_at_login = loginitem::enabled();
+    }
+
+    pub fn vendor_phase(&self) -> VendorPhase {
+        self.vendor_phase
+            .lock()
+            .map(|p| p.clone())
+            .unwrap_or(VendorPhase::Idle)
     }
 
     /// True while a background install is in flight.
@@ -808,4 +833,37 @@ pub fn suggested_modes() -> Vec<VirtualMode> {
         .iter()
         .flat_map(|&(w, h)| RATES.map(move |hz| VirtualMode::with_refresh(w, h, hz)))
         .collect()
+}
+
+/// Where a DisplayLink install started from the app currently stands.
+#[derive(Clone, Debug, PartialEq)]
+pub enum VendorPhase {
+    Idle,
+    Working {
+        stage: vendor::Stage,
+        done: u64,
+        total: u64,
+    },
+    Done,
+    Failed(String),
+}
+
+fn set_phase(slot: &Mutex<VendorPhase>, phase: VendorPhase) {
+    if let Ok(mut p) = slot.lock() {
+        *p = phase;
+    }
+}
+
+/// `osascript` reports a cancelled password prompt as error -128; say that in words.
+fn friendly_install_error(e: &anyhow::Error) -> String {
+    let text = format!("{e}");
+    if text.contains("-128") || text.contains("User canceled") {
+        "The administrator prompt was cancelled. Nothing was installed.".into()
+    } else if text.contains("checksum mismatch") {
+        "The download did not match the pinned checksum, so it was discarded.".into()
+    } else if text.contains("download failed") {
+        "Could not reach synaptics.com. Check your connection and try again.".into()
+    } else {
+        text.lines().next().unwrap_or("Install failed").to_string()
+    }
 }

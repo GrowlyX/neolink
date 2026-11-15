@@ -33,8 +33,23 @@ wire format is right.
 ## Releasing
 
 Push a `v*` tag matching the `Cargo.toml` version. The release workflow re-runs
-fmt, clippy and the tests, builds the universal bundle, and attaches a zip to a
-new GitHub release.
+fmt, clippy and the tests, builds the universal bundle, and attaches a disk
+image (plus its SHA-256) and a zip to a new GitHub release.
+
+`scripts/dmg.sh` builds the image locally. It renders the background from
+`packaging/dmg/background.swift` (black and white, drawn from the brand SVGs
+and Geist) and hands it to [dmgbuild](https://github.com/dmgbuild/dmgbuild),
+which writes the Finder layout without scripting Finder; the layout lives in
+`packaging/dmg/settings.py`, and its geometry must match the Swift renderer.
+dmgbuild is installed into `target/dmg-venv` on first use. Set
+`CODESIGN_IDENTITY` (and `NOTARY_PROFILE`) to sign and notarise the image.
+`packaging/icon.swift` regenerates `packaging/Neolink.icns` from the brand mark.
+
+The image only carries Neolink. On first launch the setup assistant
+(`crates/neolink-app/src/setup.rs`) provisions DisplayLink through
+`neolink_core::vendor`; it reappears until finished or skipped, and
+`NEOLINK_SKIP_SETUP=1` suppresses it. Debug builds accept
+`NEOLINK_SETUP_STEP=1..5` to open on a given step.
 
 The signature is ad-hoc, so first launch still needs
 `xattr -d com.apple.quarantine Neolink.app` or an Open Anyway. To distribute
