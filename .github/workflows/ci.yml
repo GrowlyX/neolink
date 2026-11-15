@@ -17,6 +17,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Workflow YAML is only parsed by GitHub after a push, so a syntax error
+  # silently produces a zero-job failure. Check it in the same run.
+  workflows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@latest
+          "$(go env GOPATH)/bin/actionlint" -color
+
   lint:
     runs-on: macos-latest
     steps:
@@ -72,7 +83,7 @@ jobs:
           codesign --verify --strict "$app"
           plutil -lint "$app/Contents/Info.plist"
       - name: probe the private API from the bundle
-        run: "$PWD/target/release/Neolink.app/Contents/MacOS/neolinkctl" probe
+        run: ${{ github.workspace }}/target/release/Neolink.app/Contents/MacOS/neolinkctl probe
       - uses: actions/upload-artifact@v4
         with:
           name: Neolink.app
