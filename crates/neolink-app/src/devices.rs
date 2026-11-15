@@ -8,6 +8,8 @@ use gpui::{div, px, Context};
 use neolink_core::virtual_display::VirtualDisplayConfig;
 
 impl crate::Neolink {
+    // The display list pane is not mounted since the UI refresh; kept for the sidebar layout.
+    #[allow(dead_code)]
     pub(crate) fn device_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let items = self.state.items.clone();
 

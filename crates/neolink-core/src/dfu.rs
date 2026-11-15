@@ -206,7 +206,7 @@ impl Functional {
 /// outgrow the vendor's own 4096-byte default stack buffer.
 pub fn initial_block(functional: Option<&Functional>) -> usize {
     match functional {
-        Some(f) => f.block.min(DEFAULT_BLOCK).max(MIN_BLOCK),
+        Some(f) => f.block.clamp(MIN_BLOCK, DEFAULT_BLOCK),
         None => DEFAULT_BLOCK,
     }
 }
@@ -267,7 +267,7 @@ impl Firmware {
         if bytes.len() <= 0xb {
             bail!("File too small: {} bytes", bytes.len());
         }
-        if bytes.len() % 4 != 0 {
+        if !bytes.len().is_multiple_of(4) {
             bail!("Firmware size {} is not a multiple of 4", bytes.len());
         }
         if !bytes.starts_with(spkg::MAGIC) {
@@ -692,7 +692,7 @@ mod tests {
         out.extend_from_slice(&table);
         // The vendor requires the file to be a multiple of four and to match
         // the header length, so pad the same way a real pack is padded.
-        while out.len() % 4 != 0 {
+        while !out.len().is_multiple_of(4) {
             out.push(0);
         }
         let total = out.len() as u32;

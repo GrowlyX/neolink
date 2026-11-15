@@ -401,7 +401,7 @@ impl AssetSource for Assets {
             "brands/xiaomi.svg" => Some(include_bytes!("../assets/brands/xiaomi.svg")),
             _ => None,
         };
-        Ok(bytes.map(|bytes| Cow::Borrowed(bytes)))
+        Ok(bytes.map(Cow::Borrowed))
     }
     fn list(&self, _path: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(Vec::new())

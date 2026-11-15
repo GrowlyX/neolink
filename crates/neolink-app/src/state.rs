@@ -31,6 +31,7 @@ pub struct Item {
     pub rotation: u32,
     pub main: bool,
     pub mirrored: bool,
+    #[allow(dead_code)] // read by the display list pane, which is not mounted right now
     pub enabled: bool,
 }
 

@@ -219,7 +219,7 @@ mod tests {
     fn refresh_is_only_restored_when_the_size_matches() {
         // The live list is whatever the machine has, so drive the matcher directly over a
         // synthetic mode set.
-        let modes = vec![
+        let modes = [
             displays::Mode {
                 id: 1,
                 width: 1920,
