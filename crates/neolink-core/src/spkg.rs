@@ -117,16 +117,36 @@ pub struct Record {
 }
 
 impl Record {
-    /// Stream bytes this fragment contributes. The body already excludes the
-    /// trailer the parser split off into `digest`.
-    pub fn data(&self) -> &[u8] {
-        &self.body
+    /// The record body as `(kind, bytes)` fragments. Each is `u8 kind`,
+    /// `u16 len`, then `len` bytes; the body already excludes the trailer the
+    /// parser split off into `digest`.
+    pub fn fragments(&self) -> Vec<(u8, &[u8])> {
+        let mut out = Vec::new();
+        let mut at = 0usize;
+        while at + 3 <= self.body.len() {
+            let kind = self.body[at];
+            let len = u16::from_le_bytes([self.body[at + 1], self.body[at + 2]]) as usize;
+            let start = at + 3;
+            let end = (start + len).min(self.body.len());
+            out.push((kind, &self.body[start..end]));
+            at = start + len;
+        }
+        out
+    }
+
+    /// Stream bytes this record contributes, i.e. its fragment payloads with
+    /// the per-fragment headers stripped.
+    pub fn data(&self) -> Vec<u8> {
+        self.fragments()
+            .into_iter()
+            .flat_map(|(_, b)| b.to_vec())
+            .collect()
     }
 }
 
 /// A parsed frame table. `rest` counts stream bytes after the last whole frame:
-/// the pieces of the `FRAGMENTED_SPKG` frame that the records did not supply.
-/// Every shipped pack ends with more of it, so `rest` is always non-zero.
+/// a `FRAGMENTED_SPKG` frame that no record finished, so the final frame is
+/// genuinely truncated in the pack itself.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Frames {
     pub frames: Vec<Vec<u8>>,
@@ -134,13 +154,9 @@ pub struct Frames {
 }
 
 impl Frames {
-    /// Frame data concatenated, i.e. bodies minus their header.
+    /// Frame bodies concatenated. The header is already stripped by the walker.
     pub fn data(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        for f in &self.frames {
-            out.extend_from_slice(f.get(FRAME_HEADER + 2..).unwrap_or(&[]));
-        }
-        out
+        self.frames.concat()
     }
 }
 
@@ -186,7 +202,7 @@ impl Pack {
         let mut out = self.head.clone().unwrap_or_default();
         out.extend_from_slice(&self.tail);
         for r in self.records.iter() {
-            out.extend_from_slice(r.data());
+            out.extend_from_slice(&r.data());
         }
         out
     }
@@ -206,11 +222,7 @@ impl Pack {
     /// error.
     pub fn frames(&self) -> Result<Frames> {
         let mut stream = self.stream();
-        let mut pending: Vec<u8> = self
-            .records
-            .iter()
-            .flat_map(|r| r.data().to_vec())
-            .collect();
+        let mut pending: Vec<u8> = self.records.iter().flat_map(Record::data).collect();
         let mut frames = Vec::new();
         let mut at = 0usize;
         // `BC` states how many frames the pack holds; stop there so trailing
@@ -235,7 +247,8 @@ impl Pack {
                 let take = (at + FRAME_HEADER + 2 - stream.len()).min(pending.len());
                 stream.extend(pending.drain(..take));
             }
-            let len = u16::from_be_bytes([stream[at + FRAME_LEN], stream[at + FRAME_LEN + 1]]) as usize;
+            let len =
+                u16::from_be_bytes([stream[at + FRAME_LEN], stream[at + FRAME_LEN + 1]]) as usize;
             if len < FRAME_HEADER + 2 {
                 return Ok(Frames {
                     frames,
@@ -320,7 +333,9 @@ pub fn parse(bytes: &[u8]) -> Result<Pack> {
         let body = bytes[body_start..body_end].to_vec();
         let field = Field::from_tag(tag);
         if field == Field::Payload {
-            // `u16 len`, the fragment, then a 28-byte trailer.
+            // `u16 len`, the fragment (`u8 kind`, `u16 len`, bytes), then a
+            // 28-byte trailer. Unlike a record, `PT` carries no per-fragment
+            // header, so the bytes after the length are already frame data.
             let declared = body
                 .get(..2)
                 .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
@@ -366,7 +381,14 @@ pub fn parse(bytes: &[u8]) -> Result<Pack> {
     while tail_start < bytes.len() && bytes[tail_start] == 0 {
         tail_start += 1;
     }
-    pack.tail = bytes[tail_start.min(bytes.len())..].to_vec();
+    // The tail ends at EOF, so any zero run after it is file padding rather
+    // than stream. Keeping it would let a truncated frame's declared length be
+    // satisfied by padding instead of by the record that carries its rest.
+    let mut tail_end = bytes.len();
+    while tail_end > tail_start && bytes[tail_end - 1] == 0 {
+        tail_end -= 1;
+    }
+    pack.tail = bytes[tail_start.min(tail_end)..tail_end].to_vec();
     Ok(pack)
 }
 
@@ -555,76 +577,112 @@ mod tests {
     }
 
     fn frame_kind(kind: u8, data: &[u8]) -> Vec<u8> {
-        // `kind`, u16 len (preamble + data), 7 scratch, 10-byte preamble, data.
-        let mut v = vec![kind, (FRAME_PREAMBLE + data.len()) as u8];
-        v.push(0);
-        v.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7]);
-        v.extend_from_slice(&[8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+        // 9 header bytes, then a big-endian u16 whose value is the whole frame
+        // length including that header, then the body.
+        let mut v = vec![kind, 0, 1, 2, 3, 4, 5, 6, 7];
+        v.extend_from_slice(&((FRAME_HEADER + 2 + data.len()) as u16).to_be_bytes());
         v.extend_from_slice(data);
         v
     }
 
-    /// A PT body: `u16 len` of the frame, the frame, then its trailer.
-    fn fragment(data: &[u8]) -> Vec<u8> {
-        let mut v = framed_body(data);
+    /// A record fragment: `u8 kind`, `u16 len`, then the bytes.
+    fn frag(kind: u8, data: &[u8]) -> Vec<u8> {
+        let mut v = vec![kind];
+        v.extend_from_slice(&(data.len() as u16).to_le_bytes());
+        v.extend_from_slice(data);
+        v
+    }
+
+    /// A `PT` body: `u16 len`, the stream bytes, then the record trailer the
+    /// vendor keeps. Unlike records, `PT` carries no per-fragment header.
+    fn payload(stream: &[u8]) -> Vec<u8> {
+        let mut v = (stream.len() as u16).to_le_bytes().to_vec();
+        v.extend_from_slice(stream);
         v.extend_from_slice(&[0u8; 28]);
         v
     }
 
-    /// A record body: `u16 len` of the frame then the frame. `build` adds the
-    /// record's own trailer, so the body does not carry one.
-    fn framed_body(data: &[u8]) -> Vec<u8> {
-        let f = frame(data);
-        let mut v = (f.len() as u16).to_le_bytes().to_vec();
-        v.extend_from_slice(&f);
-        v
-    }
-
-    fn pack() -> (Vec<u8>, Vec<u8>) {
+    /// A pack whose first frame starts in `PT` and whose *second* frame is cut
+    /// short, with the rest of that frame carried by a record, matching how the
+    /// shipped packs use `FRAGMENTED_SPKG`.
+    pub(super) fn pack() -> Vec<u8> {
+        let second = frame_kind(1, b"second");
+        let (head, rest) = second.split_at(11);
         let fields = vec![
             (Field::Record, b"EllaDock".to_vec()),
             (Field::Version, vec![0x0c, 0x03, 0x25]),
-            (Field::Payload, fragment(b"\xde\xad\xbe\xef")),
+            (Field::Payload, payload(&frame(b"first"))),
+            (Field::FrameCount, 2u32.to_be_bytes().to_vec()),
         ];
         // The tail continues after the table and must not start with 0x00, or
         // the zero-padding skip above would eat it.
-        let tail = frame_kind(1, b"second");
-        // `build` appends the record trailer itself, so the body excludes it.
         let records = vec![Record {
-            index: 2,
-            body: framed_body(b"second"),
+            index: 1,
+            body: frag(0, rest),
             digest: [0; 28],
         }];
-        (build(&fields, &records, &tail), tail)
+        build(&fields, &records, head)
     }
 
     #[test]
     fn roundtrip_fields_and_order() {
-        let (bytes, _) = pack();
+        let bytes = pack();
         let p = parse(&bytes).unwrap();
+        eprintln!(
+            "head={:?} tail={} recs={} stream={}",
+            p.head,
+            p.tail.len(),
+            p.records.len(),
+            p.stream().len()
+        );
+        eprintln!(
+            "stream bytes={:02x?}",
+            &p.stream()[..p.stream().len().min(24)]
+        );
         assert_eq!(p.name().unwrap(), "EllaDock");
         assert_eq!(p.get(Field::Version).unwrap(), &[0x0c, 0x03, 0x25]);
+        assert_eq!(p.frame_count(), Some(2));
         assert_eq!(p.records.len(), 1);
+        eprintln!("tlv={:?}", p.fields);
         let f = p.frames().unwrap();
-        // The raw body keeps its secondary preamble, `data` does not.
-        assert_eq!(f.data(), b"\xde\xad\xbe\xefsecond".to_vec());
-        // The fixture leaves a few bytes the record's own tail does not frame.
-        assert!(f.rest < 40, "unexpected {} trailing bytes", f.rest);
+        eprintln!(
+            "frames={} rest={} bodies={:?}",
+            f.frames.len(),
+            f.rest,
+            f.frames
+        );
+        assert_eq!(f.frames.len(), 2);
+        // Frame bodies are data only; the header is not part of `data`.
+        assert_eq!(f.data(), b"firstsecond".to_vec());
+    }
+
+    #[test]
+    fn frame_count_stops_before_padding() {
+        let mut bytes = pack();
+        // Trailing slack must not be read as another frame.
+        bytes.extend_from_slice(&[0u8; 64]);
+        let total = bytes.len() as u32;
+        bytes[4..8].copy_from_slice(&total.to_le_bytes());
+        let p = parse(&bytes).unwrap();
+        eprintln!("tlv={:?}", p.fields);
+        let f = p.frames().unwrap();
+        assert_eq!(f.frames.len(), 2);
+        assert_eq!(f.data(), b"firstsecond".to_vec());
     }
 
     #[test]
     fn rejects_bad_magic_and_size() {
-        let (mut bytes, _) = pack();
+        let mut bytes = pack();
         bytes[0] = b'X';
         assert!(parse(&bytes).is_err());
-        let (mut bytes, _) = pack();
+        let mut bytes = pack();
         bytes[4] = bytes[4].wrapping_add(1);
         assert!(parse(&bytes).is_err());
     }
 
     #[test]
     fn rejects_tlv_past_end() {
-        let (mut bytes, _) = pack();
+        let mut bytes = pack();
         let off = bytes.len() as u16 + 4;
         bytes[8..10].copy_from_slice(&off.to_le_bytes());
         assert!(parse(&bytes).is_err());
