@@ -52,13 +52,12 @@ jobs:
           cargo deny check
 
   test:
-    # The core crate links CoreGraphics and Objective-C, so it must run on macOS;
-    # target-specific code is behind `cfg(target_os)`.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, macos-14]
-    runs-on: ${{ matrix.os }}
+    # The core crate links CoreGraphics and Objective-C, so it has to run on
+    # macOS; target-specific code is behind `cfg(target_os)`.
+    #
+    # No OS matrix: on a private account `macos-14` resolves to a runner
+    # configuration that never schedules (macos-latest does).
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
