@@ -17,26 +17,42 @@ attached while the USB half was written, so the transport is RE-derived and
 | Vendor XPC read | `getDisplaysWithCompletionHandler:` decoded via an `NSSecureCoding` shim; `reachable()` pings it rather than grepping `launchctl` |
 | Vendor enable / brightness / contrast / flip | `setDisplay*WithPersistentDisplayId:…`; setters report failure only on a real XPC error or timeout, since the vendor replies with `nil` |
 | Agent change notifications | `enableNotifications` + a real `DisplayLinkXpcClientNotificationProtocolV2` exported object; the UI drains a channel and only polls as a fallback |
+| Login-window agent | `neolinkctl loginscreen on` installs a `LoginWindow` agent modelled on the vendor's `LoginScreenExt.pkg` (one admin prompt) |
 | Bundling | `scripts/bundle.sh` builds a universal, ad-hoc signed `.app` with icon and `Info.plist`; optional LaunchAgent for launch-at-login |
+| Screen capture | `displays::grab` reads a display through `CGDisplayCreateImage` and hands `Transport::frame` a strided BGRA buffer |
 
 ## Missing or partial
 
 | Area | Gap |
 | --- | --- |
-| Live validation of the USB transport | No dock in this session. `find_endpoints`, the reset echo and the status checksum are derived from the disassembly, not measured |
-| Frame path | `Transport::frame` ships tile fragments with a caller-supplied pixel source; no capture→encode pipeline is wired, so a physical dock shows nothing yet without the vendor agent |
-| HDCP 2.x | Not implemented; only mentioned in the failure strings we mirror |
-| EDID override | Read/write plumbing exists (`edid`, `edid-write`). The `.spkg` container, fragment splice and frame table are implemented (`neolinkctl pack F --out D`), but the frame payload itself still decodes to high-entropy bytes with no EDID magic, so there is no per-dock EDID yet |
+| Live validation of the USB transport | No dock in this session. `find_endpoints`, the reset echo, the 20-byte header and the status checksum are all derived from the disassembly, never measured on a device |
+| Frame encoding | `Transport::frame` ships the recovered 20-byte header (BE length, inclusive tile rect, fragment index and offset, `first`/`last`/`cont`) from a `CGDisplayCreateImage` capture, so capture→USB is wired. `Transport::frame_dirty` adds a 16×16 tile damage tracker (`diff::DirtyTracker`): an unchanged frame sends nothing, a moving window sends only its tiles, and damage past 60% of the frame falls back to one full-frame rect. Still raw BGRA with no h264 — the vendor's Metal/h264 encode is not reimplemented, so a full-frame refresh costs ~3x the proprietary path at 4 bytes/px |
+| HDCP 2.x | Status surface only: `neolinkctl hdcp` reads `Attributes`, decodes protection state and the sink's revision, and lists the 20 message ids. The AKE/LC/SKE handshake itself is not implemented, so HDCP-protected content will not play on the dock |
+| Per-dock EDID | `dl3::dock_edid(family, w, h)` derives a stable, family-specific block (product code and serial hash from the family name) instead of one shared template, and `neolinkctl edid --dock NAME` emits it. It is still a synthesised block, not the vendor's per-dock data |
+| `.spkg` payload | Contents, fragment splice and frame table are implemented and checked against all four shipped packs (`neolinkctl pack F --out D`), and the payload is confirmed as dock firmware, not EDID. The 28-byte record trailer digest is **open and not blocking**: it only gates firmware flashing, the display path never reads it, and the shipped packs are CDN-truncated so it probably covers bytes we do not have. Ruled out: sha1/224/256/384/512, sha512/224, sha512/256, md5, sha3-224/256/512, shake, blake2b/s (including `digest_size=28`, which is not a truncated digest), CRC-32/Adler-32, per-fragment chaining, and head/blob/body orderings. DFU framing around the bodies is likewise not implemented |
 | Refresh-rate selection | Modes carry Hz, but virtual modes are fixed at 60 and there is no picker |
 | Privileged helper | The vendor's `SMAppService` helper is used as-is; we have no helper of our own |
+| Login-screen extension semantics | Our agent re-runs the whole app at the login window; the vendor's `LoginScreenExt.pkg` also rewrites ownership and tears down stale per-user agents first, and its app runs the session as root-adjacent `loginwindow`. Not exercised on a locked machine |
+| Login-screen uninstall | `loginscreen off` boots the agent out and removes the plist but does not restore vendor agents it displaced |
 | Notarisation | Ad-hoc signature only; no Developer ID or `notarytool` run |
 | Multi-display edge cases | Mirror/arrangement restore matches by UUID only; unplugged docks are skipped silently |
 
 ## Test coverage
 
-26 unit tests cover the DL3 header/fragment/checksum rules, EDID validation, the
-SPKG container, fragment splice and frame table against synthesised and all four
-real packs, profile mirror round-trip and tidy, and the vendor pin/login-item
-helpers. Manual checks:
-`neolinkctl probe`, `neolinkctl vendor status|fetch|expand|packs`,
-`NEOLINK_DEMO=2`, and launching the signed bundle.
+46 unit tests cover the DL3 header/flags/rectangle/checksum rules, EDID
+validation plus the per-dock derivation, HDCP attribute decoding, the SPKG
+container, fragment splice and frame table against synthesised and all four real
+packs, profile mirror round-trip and tidy, the vendor pin/login-item helpers, and
+the damage tracker (first frame, unchanged frame, single-pixel damage, run and
+vertical coalescing, disjoint damage, the full-frame threshold, resize, sizes
+that are not tile multiples, stride padding, short buffers, and the invariant
+that every dirty tile is covered by a returned rect).
+
+Manual checks this session: the universal bundle from `scripts/bundle.sh
+--release` codesigns, launches and stays up with its window rendered; all four
+shipped packs parse and walk their frame tables via `neolinkctl pack`. Also
+available: `neolinkctl probe`, `neolinkctl vendor status|fetch|expand|packs`,
+`neolinkctl pack F --out D`, `neolinkctl hdcp`, `neolinkctl edid --dock NAME`
+and `neolinkctl loginscreen on|off`. `neolinkctl frame [ID] [N]`
+reports per-frame dirty tiles, rect count and bytes versus raw, and prints the
+session-wide saving.
