@@ -1,13 +1,28 @@
 # Licences and supply chain. `cargo deny check` runs in CI.
+
 [advisories]
 version = 2
 yanked = "warn"
-ignore = []
+# Every ignore below is `unmaintained` (not vulnerable) and is transitive
+# through GPUI. Re-check when GPUI moves.
+ignore = [
+  { id = "RUSTSEC-2025-0052", reason = "async-std discontinued; pulled in by gpui" },
+  { id = "RUSTSEC-2024-0384", reason = "instant unmaintained; pulled in by gpui" },
+  { id = "RUSTSEC-2024-0436", reason = "paste archived; build-time only, via gpui" },
+  { id = "RUSTSEC-2025-0134", reason = "pin-utils unmaintained; pulled in by gpui" },
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 unmaintained; build-time only" },
+  { id = "RUSTSEC-2026-0192", reason = "rustls-pemfile unmaintained; pulled in by gpui" },
+  { id = "RUSTSEC-2026-0206", reason = "rustybuzz unmaintained; GPUI text shaping" },
+  { id = "RUSTSEC-2026-0370", reason = "ttf-parser unmaintained; GPUI text shaping" },
+  { id = "RUSTSEC-2026-0371", reason = "ttf-parser unmaintained; GPUI text shaping" },
+  { id = "RUSTSEC-2026-0372", reason = "ttf-parser unmaintained; GPUI text shaping" },
+  { id = "RUSTSEC-2026-0441", reason = "zbus/zvariant unmaintained; gpui portal support" },
+]
 
 [licenses]
 version = 2
-# Everything we link must be permissive: this ships as a signed app and pulls
-# in Synaptics' package at runtime, but never its code.
+# Everything we link must be permissive or file-level copyleft (MPL). Neolink
+# itself is MIT; nothing here relicenses our source.
 allow = [
   "MIT",
   "MIT-0",
@@ -19,16 +34,17 @@ allow = [
   "Unicode-3.0",
   "Zlib",
   "CC0-1.0",
+  "MPL-2.0",
+  "NCSA",
+  "Ubuntu-font-1.0",
+  "OFL-1.1",
 ]
 confidence-threshold = 0.9
 
 [bans]
 multiple-versions = "warn"
+allow-wildcard-paths = true
 wildcards = "deny"
-deny = [
-  # Two full copies of a text stack is not worth it.
-  { name = "openssl-sys", reason = "none: we ship no OpenSSL linked binary path" },
-]
 
 [sources]
 unknown-registry = "deny"

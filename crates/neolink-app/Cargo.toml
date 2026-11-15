@@ -6,7 +6,7 @@ license.workspace = true
 description = "A fast, native DisplayLink-compatible display manager for macOS"
 
 [dependencies]
-neolink-core = { path = "../neolink-core" }
+neolink-core = { path = "../neolink-core", version = "0.1.0" }
 gpui = "0.2"
 anyhow = "1"
 objc2 = "0.6"
