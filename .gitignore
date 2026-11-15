@@ -1,3 +1,10 @@
 /target
 /dist
 .DS_Store
+
+# Reverse-engineering scratch: dumps of vendor packs and captured USB traffic.
+/vendor-dump
+*.spkg
+*.pcap
+*.bin
+!Cargo.lock

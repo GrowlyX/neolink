@@ -131,7 +131,7 @@ impl VirtualDisplay {
             let object: *mut AnyObject = msg_send![alloc, initWithDescriptor: desc];
             let object = Retained::from_raw(object)
                 .ok_or_else(|| anyhow!("CGVirtualDisplay declined to initialise"))?;
-            let _ = c_release(desc);
+            c_release(desc);
 
             let settings = build_settings(&modes, cfg.hidpi, cfg.rotation)?;
             let ok: bool = msg_send![&*object, applySettings: &*settings];

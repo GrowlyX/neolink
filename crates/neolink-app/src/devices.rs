@@ -116,9 +116,11 @@ impl crate::Neolink {
                     .child(
                         ui::pill("add-display", "+ Add virtual display", true).on_click(
                             cx.listener(|this, _, _, cx| {
-                                let mut cfg = VirtualDisplayConfig::default();
-                                cfg.modes = suggested_modes();
-                                cfg.hidpi = true;
+                                let cfg = VirtualDisplayConfig {
+                                    modes: suggested_modes(),
+                                    hidpi: true,
+                                    ..Default::default()
+                                };
                                 if let Err(e) = this.state.add_virtual(cfg) {
                                     this.state.status = format!("Could not create display: {e}");
                                 }

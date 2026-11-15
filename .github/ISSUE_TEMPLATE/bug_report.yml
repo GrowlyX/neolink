@@ -1,0 +1,58 @@
+name: Bug report
+description: The app misbehaves, or a display does the wrong thing.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please don't use this for security problems — see
+        [SECURITY.md](https://github.com/GrowlyX/neolink/blob/main/SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Neolink version
+      description: Output of `neolinkctl probe`, or the release tag.
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and build
+      description: e.g. 27.0.1 (26B5043a). Apple menu → About This Mac.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How is it installed
+      options:
+        - scripts/bundle.sh from source
+        - Downloaded release bundle
+        - cargo run
+    validations:
+      required: true
+  - type: input
+    id: dock
+    attributes:
+      label: Dock or adapter
+      description: Model, and `neolinkctl usb` output if one is attached.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        `log show --predicate 'process == "neolink"' --last 5m`
+      render: shell

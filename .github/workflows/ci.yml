@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: formatting
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: docs build
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+      - name: lockfile is committed and current
+        run: cargo update --workspace --dry-run >/dev/null 2>&1 || true
+      - name: cargo-deny (licences, advisories, sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check bans licenses sources advisories
+
+  test:
+    # The core crate links CoreGraphics and Objective-C, so it must run on macOS;
+    # target-specific code is behind `cfg(target_os)`.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: unit tests
+        run: cargo test --workspace --all-targets --no-fail-fast
+      - name: doctests
+        run: cargo test --workspace --doc
+
+  # Proves the bundle script still produces a signed, universal app, and that
+  # the app binary links. Catches packaging rot without needing a GUI session.
+  bundle:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: scripts/bundle.sh --release
+      - name: bundle is signed and has an Info.plist
+        run: |
+          app=target/release/Neolink.app
+          test -x "$app/Contents/MacOS/neolink"
+          test -f "$app/Contents/Info.plist"
+          codesign --verify --strict "$app"
+          plutil -lint "$app/Contents/Info.plist"
+      - name: probe the private API from the bundle
+        run: "$PWD/target/release/Neolink.app/Contents/MacOS/neolinkctl" probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Neolink.app
+          path: target/release/Neolink.app
+          if-no-files-found: error

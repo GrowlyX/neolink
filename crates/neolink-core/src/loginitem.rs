@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn bootstrap_uses_a_gui_domain_target() {
-        assert_eq!(uid().parse::<u32>().map(|_| ()).is_ok(), true);
+        assert!(uid().parse::<u32>().is_ok());
     }
 
     #[test]

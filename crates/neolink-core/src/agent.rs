@@ -90,7 +90,7 @@ pub fn invalidate() {
 /// the label exists, not that the service is up or that the reply decodes, so the shim pings it
 /// with a 700 ms budget.
 ///
-/// Positive answers are cached for [`REACHABLE_TTL`]; negative ones are not, so a service that
+/// Positive answers are cached for `REACHABLE_TTL`; negative ones are not, so a service that
 /// comes up is picked up on the next call. Callers on a hot path should still prefer caching the
 /// result themselves.
 pub fn reachable() -> bool {
@@ -217,10 +217,11 @@ fn json_string(obj: *mut objc2::runtime::AnyObject) -> Option<Vec<VendorDisplay>
 /// UI's tick, so it must not run on every frame.
 const DISPLAYS_TTL: std::time::Duration = std::time::Duration::from_millis(1000);
 
-fn displays_cache() -> &'static std::sync::Mutex<Option<(std::time::Instant, Vec<VendorDisplay>)>> {
-    static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<Option<(std::time::Instant, Vec<VendorDisplay>)>>,
-    > = std::sync::OnceLock::new();
+type DisplayCache = std::sync::Mutex<Option<(std::time::Instant, Vec<VendorDisplay>)>>;
+type NotifySink = std::sync::Mutex<Option<Box<dyn FnMut(Notification) + Send>>>;
+
+fn displays_cache() -> &'static DisplayCache {
+    static CACHE: std::sync::OnceLock<DisplayCache> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| std::sync::Mutex::new(None))
 }
 
@@ -233,7 +234,7 @@ pub fn invalidate_displays() {
 
 /// Displays the vendor agent currently manages. Empty when the agent is absent or idle.
 ///
-/// Cached for [`DISPLAYS_TTL`]; `force` bypasses the cache.
+/// Cached for `DISPLAYS_TTL`; `force` bypasses the cache.
 pub fn vendor_displays_cached(force: bool) -> Vec<VendorDisplay> {
     if !force {
         if let Ok(cache) = displays_cache().lock() {
@@ -301,8 +302,7 @@ extern "C" fn notification_trampoline(json: *const std::ffi::c_char) {
     }
 }
 
-static NOTIFY_SINK: std::sync::Mutex<Option<Box<dyn FnMut(Notification) + Send>>> =
-    std::sync::Mutex::new(None);
+static NOTIFY_SINK: NotifySink = std::sync::Mutex::new(None);
 
 /// Subscribe to vendor change notifications. The callback runs on an XPC queue, so it must be
 /// cheap and non-blocking; hand work to a channel rather than calling into UI state.

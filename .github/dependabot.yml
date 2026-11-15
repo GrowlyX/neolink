@@ -1,0 +1,24 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # objc2/objc2-* and the GPUI tree must move together or not at all.
+      objc:
+        patterns: ["objc2*", "block2", "core-foundation*"]
+      deps:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"

@@ -1,0 +1,36 @@
+# Licences and supply chain. `cargo deny check` runs in CI.
+[advisories]
+version = 2
+yanked = "warn"
+ignore = []
+
+[licenses]
+version = 2
+# Everything we link must be permissive: this ships as a signed app and pulls
+# in Synaptics' package at runtime, but never its code.
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "CC0-1.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = [
+  # Two full copies of a text stack is not worth it.
+  { name = "openssl-sys", reason = "none: we ship no OpenSSL linked binary path" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

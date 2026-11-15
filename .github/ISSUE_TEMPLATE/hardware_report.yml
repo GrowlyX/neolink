@@ -1,0 +1,44 @@
+name: Hardware report
+description: A dock works, half works, or doesn't with Neolink's own transport.
+labels: ["hardware"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The USB transport is reverse engineered and unvalidated on hardware.
+        Every report on a real dock is useful, including "it works".
+  - type: input
+    id: dock
+    attributes:
+      label: Dock or adapter
+      description: Model and USB vendor:product id.
+    validations:
+      required: true
+  - type: textarea
+    id: usb
+    attributes:
+      label: neolinkctl usb output
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happens
+      description: |
+        Did `neolinkctl transport` open the device? Did the dock enumerate or
+        show a picture? Paste the output and any `log show` lines.
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and build
+    validations:
+      required: true
+  - type: checkboxes
+    id: vendor
+    attributes:
+      label: Vendor agent
+      options:
+        - label: DisplayLink Manager was running (only the vendor agent may hold the interface otherwise)

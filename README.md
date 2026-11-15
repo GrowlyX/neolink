@@ -1,3 +1,10 @@
+<p align="center">
+  <a href="https://github.com/GrowlyX/neolink/actions/workflows/ci.yml"><img src="https://github.com/GrowlyX/neolink/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/GrowlyX/neolink/releases/latest"><img src="https://img.shields.io/github/v/release/GrowlyX/neolink" alt="latest release"></a>
+  <img src="https://img.shields.io/badge/platform-macOS%2014%2B-blue" alt="macOS 14+">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-blue" alt="MIT"></a>
+</p>
+
 # Neolink
 
 A native, Rust display manager for macOS that can drive displays the way
@@ -15,14 +22,6 @@ Two halves:
 
 `docs/RE-FINDINGS.md` records how the vendor 17.1.56 package works and which
 private APIs are used.
-
-## Status
-
-Early but functional on macOS 14+. Virtual displays created through
-`CGVirtualDisplay` come online, keep their identity, and survive mode, origin,
-rotation and HiDPI changes. See [COMPATIBILITY.md](COMPATIBILITY.md) for the
-honest parity matrix — this is **not** yet a drop-in replacement for DisplayLink
-Manager on real docks.
 
 ## Install
 
@@ -90,3 +89,16 @@ DisplayLink Manager and the per-dock `.spkg` firmware/EDID packs are Synaptics'
 and stay under their EULA. Neolink ships none of them: it stores a URL and a
 SHA-256 and pulls the bytes from Synaptics' own server at install time. The RE
 notes in `docs/RE-FINDINGS.md` describe behaviour and structure only.
+
+## Docs
+
+- [COMPATIBILITY.md](COMPATIBILITY.md): what works, what doesn't, measured
+- [docs/RE-FINDINGS.md](docs/RE-FINDINGS.md): how the vendor package and the
+  private APIs actually work
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): building, testing, what CI checks
+- [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md)
+
+## Status
+
+Pre-1.0. The virtual-display side works; the USB side is reverse engineered and
+**unvalidated on hardware**. See COMPATIBILITY.md before trusting it with a dock.

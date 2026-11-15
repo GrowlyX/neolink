@@ -85,7 +85,7 @@ pub fn find_endpoints(
                 }
             }
         }
-        let Some((out, in_)) = out.zip(in_).map(|(o, i)| (o, i)) else {
+        let Some((out, in_)) = out.zip(in_) else {
             continue;
         };
         let pair = Endpoints { out, in_ };

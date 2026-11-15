@@ -175,7 +175,7 @@ impl Pack {
         let mut out = self.head.clone().unwrap_or_default();
         out.extend_from_slice(&self.tail);
         for r in self.records.iter() {
-            out.extend_from_slice(&r.data());
+            out.extend_from_slice(r.data());
         }
         out
     }
@@ -412,12 +412,8 @@ impl Sha224 {
             self.buf.push(0);
         }
         self.buf.extend_from_slice(&bits.to_be_bytes());
-        let blocks: Vec<[u8; 64]> = self
-            .buf
-            .chunks_exact(64)
-            .map(|c| c.try_into().unwrap())
-            .collect();
-        for b in &blocks {
+        let chunks: Vec<[u8; 64]> = self.buf.as_chunks::<64>().0.to_vec();
+        for b in &chunks {
             self.compress(b);
         }
         let mut out = [0u8; 28];

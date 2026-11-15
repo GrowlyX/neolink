@@ -1,7 +1,9 @@
 use neolink_core::virtual_display::*;
 fn main() {
-    let mut cfg = VirtualDisplayConfig::default();
-    cfg.modes = vec![VirtualMode::new(1920, 1080), VirtualMode::new(1280, 720)];
+    let mut cfg = VirtualDisplayConfig {
+        modes: vec![VirtualMode::new(1920, 1080), VirtualMode::new(1280, 720)],
+        ..Default::default()
+    };
     let mut d = VirtualDisplay::new(&cfg).unwrap();
     let id = d.display_id();
     println!("id={id}");

@@ -211,7 +211,7 @@ pub fn fragment(seq: &mut u8, x: u16, y: u16, w: u16, h: u16, chunk: usize) -> V
 /// and header test. `0x00ffffffffffff00` is the fixed EDID 1.x preamble.
 pub fn valid_edid(edid: &[u8]) -> bool {
     edid.len() >= 128
-        && edid.len() % 128 == 0
+        && edid.len().is_multiple_of(128)
         && edid.starts_with(&[0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00])
 }
 
@@ -234,6 +234,122 @@ pub fn status_body(op: StatusOp, arg: u16, data: &[u8]) -> Vec<u8> {
     let sum = checksum(&out);
     out.extend_from_slice(&sum.to_le_bytes());
     out
+}
+
+/// A synthesised 128-byte EDID 1.4 base block for a display of `width`×`height` mm.
+///
+/// Used when a dock answers no EDID (or the user overrides one): the descriptor is only
+/// geometry and a range limit, so nothing vendor-specific is baked in and the block is ours to
+/// ship. The checksum is set, so [`valid_edid`] accepts it.
+pub fn template_edid(width_mm: u16, height_mm: u16, name: &str) -> Vec<u8> {
+    let mut e = vec![0u8; 128];
+    e[..8].copy_from_slice(&[0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00]);
+    // Manufacturer id "NEO", little-endian 5-bit packing; product + serial are fixed so a given
+    // dock always presents the same identity.
+    // "NEO" packed 5 bits per letter, most significant letter first.
+    e[8] = 0x39;
+    e[9] = 0x6f;
+    e[10] = 0x01;
+    e[11] = 0x00;
+    e[12] = 0x01;
+    e[13] = 0x00;
+    e[14] = 0x00;
+    e[16] = 35; // week
+    e[17] = 30; // 2020
+    e[18] = 1; // EDID 1.4
+    e[19] = 4;
+    e[20] = 0xa5; // digital input, 8 bpc, DisplayPort
+    e[21] = (width_mm.min(u16::from(u8::MAX))) as u8;
+    e[22] = (height_mm.min(u16::from(u8::MAX))) as u8;
+    e[23] = 120; // gamma 2.2
+    e[24] = 0x0a; // RGB, preferred timing, sRGB
+    e[25] = 0xee; // RGB 4:4:4, sRGB default
+    e[26] = 0x91;
+    e[27] = 0xa3;
+    e[28] = 0x57;
+    e[29] = 0x4c;
+    e[30] = 0x9e;
+    e[31] = 0x25;
+    e[32] = 0x10;
+    e[33] = 0x50;
+    e[34] = 0x54; // established timings: 640x480@60, 800x600@60, 1024x768@60
+                  // Standard timings, all 16:9 and 16:10 at 60 Hz, then unused.
+    let pairs: [(u16, u16); 8] = [
+        (1280, 720),
+        (1280, 800),
+        (1366, 768),
+        (1440, 900),
+        (1600, 900),
+        (1680, 1050),
+        (1920, 1080),
+        (1920, 1200),
+    ];
+    for (i, (w, h)) in pairs.iter().enumerate() {
+        let at = 38 + i * 2;
+        e[at] = (w / 8).saturating_sub(31) as u8;
+        e[at + 1] = ((((*h as f32 / *w as f32) * 4.0 - 1.0) * 16.0) as u8 & 0xf0) | 0x01;
+    }
+    // Descriptor 1: range limits (48–75 Hz, 300 MHz).
+    e[54..72].copy_from_slice(&[
+        0x00, 0x00, 0x00, 0xfd, 0x00, 0x30, 0x4b, 0x12, 0x3c, 0x11, 0x00, 0x0a, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20,
+    ]);
+    // Descriptor 2: monitor name.
+    let mut d = [0u8; 18];
+    d[3] = 0xfc;
+    d[5..].fill(0x20);
+    for (i, b) in name.as_bytes().iter().take(13).enumerate() {
+        d[5 + i] = *b;
+    }
+    d[17] = 0x0a;
+    e[72..90].copy_from_slice(&d);
+    // Descriptor 3: a second, preferred-ish detailed timing for 1920x1080@60.
+    e[90..108].copy_from_slice(&detailed_timing(1920, 1080));
+    e[108..126].fill(0x20);
+    e[126] = 0;
+    e[127] = 0;
+    fix_edid_checksum(&mut e);
+    e
+}
+
+/// One 18-byte detailed timing descriptor. Blanking follows the CEA-861 1080p60 numbers scaled
+/// to the pixel clock so any caller size stays arithmetically consistent.
+fn detailed_timing(w: u16, h: u16) -> [u8; 18] {
+    let hactive = w.min(4095);
+    let vactive = h.min(4095);
+    let hblank = (w / 6).clamp(40, 1023);
+    let vblank = (h / 40).clamp(4, 63);
+    let hsync_off = (hblank / 4).min(1023);
+    let hsync_w = 32u16.min(hblank / 2);
+    let vsync_off = (vblank / 6).clamp(1, 63);
+    let vsync_w = 3u16.min(vblank / 2).max(1);
+    let htotal = hactive + hblank;
+    let vtotal = vactive + vblank;
+    // Pixel clock in 10 kHz units, derived from the totals so it stays consistent with the
+    // blanking written below (1920x1080@60 lands on 148.7 MHz).
+    let clock = (htotal as u32 * vtotal as u32 * 60 / 10_000).min(65_535) as u16;
+    let mut d = [0u8; 18];
+    d[0..2].copy_from_slice(&clock.to_le_bytes());
+    d[2] = (hactive & 0xff) as u8;
+    d[3] = (hblank & 0xff) as u8;
+    d[4] = ((hactive >> 8) as u8 & 0x0f) << 4 | ((hblank >> 8) as u8 & 0x0f);
+    d[5] = (vactive & 0xff) as u8;
+    d[6] = (vblank & 0xff) as u8;
+    d[7] = ((vactive >> 8) as u8 & 0x0f) << 4 | ((vblank >> 8) as u8 & 0x0f);
+    d[8] = (hsync_off & 0xff) as u8;
+    d[9] = (hsync_w & 0xff) as u8;
+    d[10] = (((vsync_off & 0x0f) as u8) << 4) | (vsync_w & 0x0f) as u8;
+    d[11] = (((hsync_off >> 8) as u8 & 0x03) << 6)
+        | (((hsync_w >> 8) as u8 & 0x03) << 4)
+        | (((vsync_off >> 4) as u8 & 0x03) << 2)
+        | ((vsync_w >> 4) as u8 & 0x03);
+    d[12] = (w / 10).min(255) as u8;
+    d[13] = (h / 10).min(255) as u8;
+    d[14] = 0;
+    d[15] = 0;
+    d[16] = 0;
+    d[17] = 0x1e;
+    d
 }
 
 #[cfg(test)]
@@ -344,120 +460,4 @@ mod tests {
             sum
         );
     }
-}
-
-/// A synthesised 128-byte EDID 1.4 base block for a display of `width`×`height` mm.
-///
-/// Used when a dock answers no EDID (or the user overrides one): the descriptor is only
-/// geometry and a range limit, so nothing vendor-specific is baked in and the block is ours to
-/// ship. The checksum is set, so [`valid_edid`] accepts it.
-pub fn template_edid(width_mm: u16, height_mm: u16, name: &str) -> Vec<u8> {
-    let mut e = vec![0u8; 128];
-    e[..8].copy_from_slice(&[0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00]);
-    // Manufacturer id "NEO", little-endian 5-bit packing; product + serial are fixed so a given
-    // dock always presents the same identity.
-    // "NEO" packed 5 bits per letter, most significant letter first.
-    e[8] = 0x39;
-    e[9] = 0x6f;
-    e[10] = 0x01;
-    e[11] = 0x00;
-    e[12] = 0x01;
-    e[13] = 0x00;
-    e[14] = 0x00;
-    e[16] = 35; // week
-    e[17] = 30; // 2020
-    e[18] = 1; // EDID 1.4
-    e[19] = 4;
-    e[20] = 0xa5; // digital input, 8 bpc, DisplayPort
-    e[21] = (width_mm.min(u16::from(u8::MAX))) as u8;
-    e[22] = (height_mm.min(u16::from(u8::MAX))) as u8;
-    e[23] = 120; // gamma 2.2
-    e[24] = 0x0a; // RGB, preferred timing, sRGB
-    e[25] = 0xee; // RGB 4:4:4, sRGB default
-    e[26] = 0x91;
-    e[27] = 0xa3;
-    e[28] = 0x57;
-    e[29] = 0x4c;
-    e[30] = 0x9e;
-    e[31] = 0x25;
-    e[32] = 0x10;
-    e[33] = 0x50;
-    e[34] = 0x54; // established timings: 640x480@60, 800x600@60, 1024x768@60
-                  // Standard timings, all 16:9 and 16:10 at 60 Hz, then unused.
-    let pairs: [(u16, u16); 8] = [
-        (1280, 720),
-        (1280, 800),
-        (1366, 768),
-        (1440, 900),
-        (1600, 900),
-        (1680, 1050),
-        (1920, 1080),
-        (1920, 1200),
-    ];
-    for (i, (w, h)) in pairs.iter().enumerate() {
-        let at = 38 + i * 2;
-        e[at] = (w / 8).saturating_sub(31) as u8;
-        e[at + 1] = ((((*h as f32 / *w as f32) * 4.0 - 1.0) * 16.0) as u8 & 0xf0) | 0x01;
-    }
-    // Descriptor 1: range limits (48–75 Hz, 300 MHz).
-    e[54..72].copy_from_slice(&[
-        0x00, 0x00, 0x00, 0xfd, 0x00, 0x30, 0x4b, 0x12, 0x3c, 0x11, 0x00, 0x0a, 0x20, 0x20, 0x20,
-        0x20, 0x20, 0x20,
-    ]);
-    // Descriptor 2: monitor name.
-    let mut d = [0u8; 18];
-    d[3] = 0xfc;
-    d[5..].fill(0x20);
-    for (i, b) in name.as_bytes().iter().take(13).enumerate() {
-        d[5 + i] = *b;
-    }
-    d[17] = 0x0a;
-    e[72..90].copy_from_slice(&d);
-    // Descriptor 3: a second, preferred-ish detailed timing for 1920x1080@60.
-    e[90..108].copy_from_slice(&detailed_timing(1920, 1080));
-    e[108..126].fill(0x20);
-    e[126] = 0;
-    e[127] = 0;
-    fix_edid_checksum(&mut e);
-    e
-}
-
-/// One 18-byte detailed timing descriptor. Blanking follows the CEA-861 1080p60 numbers scaled
-/// to the pixel clock so any caller size stays arithmetically consistent.
-fn detailed_timing(w: u16, h: u16) -> [u8; 18] {
-    let hactive = w.min(4095);
-    let vactive = h.min(4095);
-    let hblank = (w / 6).max(40).min(1023);
-    let vblank = (h / 40).max(4).min(63);
-    let hsync_off = (hblank / 4).min(1023);
-    let hsync_w = 32u16.min(hblank / 2);
-    let vsync_off = (vblank / 6).max(1).min(63);
-    let vsync_w = 3u16.min(vblank / 2).max(1);
-    let htotal = hactive + hblank;
-    let vtotal = vactive + vblank;
-    // Pixel clock in 10 kHz units, derived from the totals so it stays consistent with the
-    // blanking written below (1920x1080@60 lands on 148.7 MHz).
-    let clock = (htotal as u32 * vtotal as u32 * 60 / 10_000).min(65_535) as u16;
-    let mut d = [0u8; 18];
-    d[0..2].copy_from_slice(&clock.to_le_bytes());
-    d[2] = (hactive & 0xff) as u8;
-    d[3] = (hblank & 0xff) as u8;
-    d[4] = ((hactive >> 8) as u8 & 0x0f) << 4 | ((hblank >> 8) as u8 & 0x0f);
-    d[5] = (vactive & 0xff) as u8;
-    d[6] = (vblank & 0xff) as u8;
-    d[7] = ((vactive >> 8) as u8 & 0x0f) << 4 | ((vblank >> 8) as u8 & 0x0f);
-    d[8] = (hsync_off & 0xff) as u8;
-    d[9] = (hsync_w & 0xff) as u8;
-    d[10] = (((vsync_off & 0x0f) as u8) << 4) | (vsync_w & 0x0f) as u8;
-    d[11] = (((hsync_off >> 8) as u8 & 0x03) << 6)
-        | (((hsync_w >> 8) as u8 & 0x03) << 4)
-        | (((vsync_off >> 4) as u8 & 0x03) << 2)
-        | ((vsync_w >> 4) as u8 & 0x03);
-    d[12] = (w / 10).min(255) as u8;
-    d[13] = (h / 10).min(255) as u8;
-    d[14] = 0;
-    d[15] = 0;
-    d[16] = 0;
-    d[17] = 0x1e;
-    d
 }
