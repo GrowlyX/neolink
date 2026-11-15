@@ -83,6 +83,15 @@ crates/neolink-core/src/transport.rs    DL3 USB transport
 crates/neolink-core/src/vendor.rs       Pinned package fetch, verify, and install
 ```
 
+## Brand assets
+
+The approved Neolink logo kit is included under [`crates/neolink-app/assets/brand/`](crates/neolink-app/assets/brand/):
+
+- Mark: [black](crates/neolink-app/assets/brand/neolink-mark-black.svg) · [white](crates/neolink-app/assets/brand/neolink-mark-white.svg)
+- App icon, white mark on black square: [neolink-icon.svg](crates/neolink-app/assets/brand/neolink-icon.svg)
+- Lockup: [black](crates/neolink-app/assets/brand/neolink-lockup-black.svg) · [white](crates/neolink-app/assets/brand/neolink-lockup-white.svg)
+- Wordmark: [black](crates/neolink-app/assets/brand/neolink-wordmark-black.svg) · [white](crates/neolink-app/assets/brand/neolink-wordmark-white.svg)
+
 ## Limitations
 
 The virtual-display and arrangement paths work locally. The USB transport has not been tested against a physical dock, and the frame capture/encode path is not connected yet. HDCP support and notarized distribution are also not implemented. The compatibility matrix and validation notes are in [COMPATIBILITY.md](COMPATIBILITY.md).
