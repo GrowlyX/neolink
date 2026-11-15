@@ -22,7 +22,7 @@ jobs:
   workflows:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: actionlint
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@latest
@@ -31,7 +31,7 @@ jobs:
   lint:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -59,7 +59,7 @@ jobs:
     # configuration that never schedules (macos-latest does).
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: unit tests
@@ -72,7 +72,7 @@ jobs:
   bundle:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: scripts/bundle.sh --release
@@ -85,7 +85,7 @@ jobs:
           plutil -lint "$app/Contents/Info.plist"
       - name: probe the private API from the bundle
         run: ${{ github.workspace }}/target/release/Neolink.app/Contents/MacOS/neolinkctl probe
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
           name: Neolink.app
