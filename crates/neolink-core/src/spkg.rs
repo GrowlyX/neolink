@@ -42,10 +42,10 @@ use std::path::Path;
 pub const MAGIC: &[u8; 4] = b"ELLA";
 /// The vendor refuses files with a TLV table longer than this.
 pub const MAX_TLV: usize = 0x200000;
-/// Bytes of frame header: `u8 kind`, `u16 len`, then 7 scratch bytes.
-pub const FRAME_HEADER: usize = 10;
-/// Bytes of second preamble at the start of a frame body.
-pub const FRAME_PREAMBLE: usize = 10;
+/// Bytes of frame header before the big-endian total length at [`FRAME_LEN`].
+pub const FRAME_HEADER: usize = 9;
+/// Offset of the big-endian u16 that holds the whole frame length.
+pub const FRAME_LEN: usize = 9;
 
 /// Metadata TLVs the agent recognises.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,6 +68,8 @@ pub enum Field {
     Body,
     /// `PT` — payload.
     Payload,
+    /// `BC` — declared frame count (`u32` big-endian, then a build hash).
+    FrameCount,
     Unknown([u8; 2]),
 }
 
@@ -83,6 +85,7 @@ impl Field {
             b"TI" => Field::Time,
             b"BD" => Field::Body,
             b"PT" => Field::Payload,
+            b"BC" => Field::FrameCount,
             _ => Field::Unknown(tag),
         }
     }
@@ -98,6 +101,7 @@ impl Field {
             Field::Time => *b"TI",
             Field::Body => *b"BD",
             Field::Payload => *b"PT",
+            Field::FrameCount => *b"BC",
             Field::Unknown(t) => t,
         }
     }
@@ -130,11 +134,11 @@ pub struct Frames {
 }
 
 impl Frames {
-    /// Frame data concatenated, i.e. bodies minus their second preamble.
+    /// Frame data concatenated, i.e. bodies minus their header.
     pub fn data(&self) -> Vec<u8> {
         let mut out = Vec::new();
         for f in &self.frames {
-            out.extend_from_slice(f.get(FRAME_PREAMBLE..).unwrap_or(&[]));
+            out.extend_from_slice(f.get(FRAME_HEADER + 2..).unwrap_or(&[]));
         }
         out
     }
@@ -168,6 +172,13 @@ impl Pack {
         self.text(Field::Record)
     }
 
+    /// Frame count the pack declares in its `BC` field, when it has one.
+    pub fn frame_count(&self) -> Option<usize> {
+        let raw = self.get(Field::FrameCount)?;
+        let n = u32::from_be_bytes(raw.get(..4)?.try_into().ok()?) as usize;
+        (n > 0).then_some(n)
+    }
+
     /// The reassembled stream: `PT` data, the bytes after the TLV table, then
     /// each record's data in index order. The final frame of a pack is split
     /// across the two, so this is the only order that decodes.
@@ -180,14 +191,19 @@ impl Pack {
         out
     }
 
-    /// Split the stream into frames, returning each frame's data.
+    /// Split the stream into frames.
     ///
-    /// A frame is `u8 kind`, `u16 len`, 7 scratch bytes, then `len` bytes of
-    /// which the first 10 are a second preamble. The final frame of every
-    /// shipped pack is cut short and the rest of it sits in a record; `records`
-    /// are spliced back at the cut in index order. `rest` is what is left when
-    /// the records run out — the image format on top of the frames is the
-    /// remaining unknown, so a pack never ends cleanly today.
+    /// A frame is 9 header bytes, a big-endian `u16` total length that counts
+    /// the whole frame including its header, then the body. Bytes 0 and 1 are
+    /// per-frame values (they look like a tag and a checksum; neither is
+    /// constant), the rest of the header is opaque.
+    ///
+    /// The final frame of a pack is cut short: its tail lives in the record
+    /// fragments and the `FRAGMENTED_SPKG` path stitches them back on in index
+    /// order. `rest` is what is left when a frame still overruns with no record
+    /// bytes to finish it — on the shipped packs that is only ever the last
+    /// frame of a pack that is itself truncated, so it is reported, not an
+    /// error.
     pub fn frames(&self) -> Result<Frames> {
         let mut stream = self.stream();
         let mut pending: Vec<u8> = self
@@ -197,26 +213,37 @@ impl Pack {
             .collect();
         let mut frames = Vec::new();
         let mut at = 0usize;
+        // `BC` states how many frames the pack holds; stop there so trailing
+        // padding cannot be read as another frame.
+        let limit = self.frame_count();
         loop {
-            while at + FRAME_HEADER > stream.len() {
+            if let Some(n) = limit {
+                if frames.len() >= n {
+                    return Ok(Frames {
+                        frames,
+                        rest: stream.len() - at,
+                    });
+                }
+            }
+            while at + FRAME_HEADER + 2 > stream.len() {
                 if pending.is_empty() {
                     return Ok(Frames {
                         frames,
                         rest: stream.len() - at,
                     });
                 }
-                let take = (at + FRAME_HEADER - stream.len()).min(pending.len());
+                let take = (at + FRAME_HEADER + 2 - stream.len()).min(pending.len());
                 stream.extend(pending.drain(..take));
             }
-            let len = u16::from_le_bytes([stream[at + 1], stream[at + 2]]) as usize;
-            if len < FRAME_PREAMBLE {
+            let len = u16::from_be_bytes([stream[at + FRAME_LEN], stream[at + FRAME_LEN + 1]]) as usize;
+            if len < FRAME_HEADER + 2 {
                 return Ok(Frames {
                     frames,
                     rest: stream.len() - at,
                 });
             }
-            let body = at + FRAME_HEADER;
-            let end = body + len;
+            let body = at + FRAME_HEADER + 2;
+            let end = at + len;
             while end > stream.len() {
                 if pending.is_empty() {
                     return Ok(Frames {
@@ -227,8 +254,6 @@ impl Pack {
                 let take = (end - stream.len()).min(pending.len());
                 stream.extend(pending.drain(..take));
             }
-            // Keep the raw body: the first FRAME_PREAMBLE bytes are a second
-            // preamble, the rest is data. `Frames::data` drops the preamble.
             frames.push(stream[body..end].to_vec());
             at = end;
         }
@@ -240,8 +265,8 @@ impl Pack {
         self.frames()
     }
 
-    /// Frame data concatenated — the firmware/EDID image itself, minus any
-    /// partial trailing frame.
+    /// Frame data concatenated — the firmware image itself, minus any partial
+    /// trailing frame.
     pub fn image(&self) -> Result<Vec<u8>> {
         Ok(self.frames()?.data())
     }
