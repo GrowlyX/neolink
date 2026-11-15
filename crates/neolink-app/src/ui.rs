@@ -6,7 +6,7 @@
 
 use crate::theme;
 use gpui::prelude::*;
-use gpui::{App, Div, Hsla, IntoElement, SharedString, Window, div, px, rgb};
+use gpui::{div, px, rgb, App, Div, Hsla, IntoElement, SharedString, Window};
 
 /// A frosted panel with an optional highlight border.
 pub fn glass(radius: f32) -> Div {
@@ -17,7 +17,6 @@ pub fn glass(radius: f32) -> Div {
         .rounded(px(radius))
         .shadow_lg()
 }
-
 
 /// Inset chip, used for badges and small stats.
 pub fn chip() -> Div {
@@ -33,7 +32,10 @@ pub fn chip() -> Div {
 }
 
 pub fn label(text: impl Into<SharedString>) -> impl IntoElement {
-    div().text_xs().text_color(theme::TEXT_FAINT).child(text.into())
+    div()
+        .text_xs()
+        .text_color(theme::TEXT_FAINT)
+        .child(text.into())
 }
 
 pub fn value(text: impl Into<SharedString>) -> impl IntoElement {
@@ -46,9 +48,21 @@ pub fn pill(
     text: impl Into<SharedString>,
     active: bool,
 ) -> gpui::Stateful<Div> {
-    let bg = if active { theme::with_alpha(theme::ACCENT, 0.18) } else { theme::GLASS_SOFT };
-    let fg = if active { theme::ACCENT } else { theme::TEXT_DIM };
-    let border = if active { theme::with_alpha(theme::ACCENT, 0.45) } else { theme::HAIRLINE_SOFT };
+    let bg = if active {
+        theme::with_alpha(theme::ACCENT, 0.18)
+    } else {
+        theme::GLASS_SOFT
+    };
+    let fg = if active {
+        theme::ACCENT
+    } else {
+        theme::TEXT_DIM
+    };
+    let border = if active {
+        theme::with_alpha(theme::ACCENT, 0.45)
+    } else {
+        theme::HAIRLINE_SOFT
+    };
     div()
         .id(id.into())
         .px_3()
@@ -113,7 +127,11 @@ pub fn logo(size: f32) -> impl IntoElement {
 /// A tiny toggle that reads as a physical switch.
 pub fn toggle(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<Div> {
     let (track, knob_left, knob_bg) = if on {
-        (theme::with_alpha(theme::ACCENT, 0.35), px(17.0), theme::ACCENT)
+        (
+            theme::with_alpha(theme::ACCENT, 0.35),
+            px(17.0),
+            theme::ACCENT,
+        )
     } else {
         (theme::SHEEN, px(2.0), theme::TEXT_DIM)
     };
@@ -175,7 +193,12 @@ pub fn slider(
     let fill = color.into();
     let lit = (r * STEPS as f32).round() as usize;
     let name = id_hint(id);
-    let mut row = div().flex().items_center().gap(px(2.0)).h(px(16.0)).w_full();
+    let mut row = div()
+        .flex()
+        .items_center()
+        .gap(px(2.0))
+        .h(px(16.0))
+        .w_full();
     for i in 0..STEPS {
         let set = on_set.clone();
         row = row.child(
@@ -187,7 +210,15 @@ pub fn slider(
                 .bg(if i < lit { fill } else { theme::SHEEN.into() })
                 .cursor_pointer()
                 .hover(|s| s.h(px(7.0)))
-                .on_click(move |_, window, cx| set(&SliderSet { step: (i + 1) as f32 / STEPS as f32 }, window, cx)),
+                .on_click(move |_, window, cx| {
+                    set(
+                        &SliderSet {
+                            step: (i + 1) as f32 / STEPS as f32,
+                        },
+                        window,
+                        cx,
+                    )
+                }),
         );
     }
     div().w_full().py_0p5().child(row)

@@ -130,7 +130,8 @@ pub fn start() -> Result<()> {
     if running() {
         return Ok(());
     }
-    let app = path().ok_or_else(|| anyhow!("DisplayLink Manager is not installed at {APP_PATH}"))?;
+    let app =
+        path().ok_or_else(|| anyhow!("DisplayLink Manager is not installed at {APP_PATH}"))?;
     let uid = Command::new("/usr/bin/id").arg("-u").output()?;
     let uid = String::from_utf8_lossy(&uid.stdout).trim().to_string();
     let status = Command::new("/bin/launchctl")
@@ -145,8 +146,14 @@ pub fn start() -> Result<()> {
 }
 
 pub fn stop() -> Result<()> {
-    for name in ["DisplayLinkUserAgent", "DisplayLink Manager", "DisplayLinkXpcService"] {
-        let _ = Command::new("/usr/bin/pkill").args(["-TERM", "-x", name]).status();
+    for name in [
+        "DisplayLinkUserAgent",
+        "DisplayLink Manager",
+        "DisplayLinkXpcService",
+    ] {
+        let _ = Command::new("/usr/bin/pkill")
+            .args(["-TERM", "-x", name])
+            .status();
     }
     invalidate();
     Ok(())
@@ -211,8 +218,9 @@ fn json_string(obj: *mut objc2::runtime::AnyObject) -> Option<Vec<VendorDisplay>
 const DISPLAYS_TTL: std::time::Duration = std::time::Duration::from_millis(1000);
 
 fn displays_cache() -> &'static std::sync::Mutex<Option<(std::time::Instant, Vec<VendorDisplay>)>> {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<Option<(std::time::Instant, Vec<VendorDisplay>)>>> =
-        std::sync::OnceLock::new();
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<Option<(std::time::Instant, Vec<VendorDisplay>)>>,
+    > = std::sync::OnceLock::new();
     CACHE.get_or_init(|| std::sync::Mutex::new(None))
 }
 
@@ -281,7 +289,9 @@ extern "C" fn notification_trampoline(json: *const std::ffi::c_char) {
     if json.is_null() {
         return;
     }
-    let text = unsafe { std::ffi::CStr::from_ptr(json) }.to_string_lossy().into_owned();
+    let text = unsafe { std::ffi::CStr::from_ptr(json) }
+        .to_string_lossy()
+        .into_owned();
     if let Some(n) = handle_notification(&text) {
         if let Ok(mut sink) = NOTIFY_SINK.lock() {
             if let Some(cb) = sink.as_mut() {
@@ -335,9 +345,21 @@ mod tests {
     #[test]
     fn notification_json_maps_to_variants() {
         let n = handle_notification(r#"{"event":"brightness","pid":"p1","value":0.25}"#).unwrap();
-        assert_eq!(n, Notification::Brightness { pid: "p1".into(), value: 0.25 });
+        assert_eq!(
+            n,
+            Notification::Brightness {
+                pid: "p1".into(),
+                value: 0.25
+            }
+        );
         let n = handle_notification(r#"{"event":"flip","pid":"p1","value":1}"#).unwrap();
-        assert_eq!(n, Notification::Flip { pid: "p1".into(), value: 1.0 });
+        assert_eq!(
+            n,
+            Notification::Flip {
+                pid: "p1".into(),
+                value: 1.0
+            }
+        );
         assert!(handle_notification(r#"{"event":"displays","displays":[]}"#).is_some());
         assert!(handle_notification("nonsense").is_none());
     }

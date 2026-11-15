@@ -82,7 +82,16 @@ pub struct Header {
 
 impl Header {
     pub fn new(op: Op, seq: u8, len: u16) -> Self {
-        Self { op, channel: 0, len, first: true, last: true, seq, tile_x: 0, tile_y: 0 }
+        Self {
+            op,
+            channel: 0,
+            len,
+            first: true,
+            last: true,
+            seq,
+            tile_x: 0,
+            tile_y: 0,
+        }
     }
 
     /// Commander-style packet used for the initial channel probe: byte 0 is a
@@ -138,7 +147,11 @@ pub fn parse(buf: &[u8]) -> Result<(Header, &[u8])> {
     let len = u16::from_le_bytes([buf[2], buf[3]]);
     let payload = &buf[HEADER_LEN..];
     if payload.len() < len as usize {
-        bail!("TG length {} exceeds {} available bytes", len, payload.len());
+        bail!(
+            "TG length {} exceeds {} available bytes",
+            len,
+            payload.len()
+        );
     }
     let flags = if tag == 0x01 { 0 } else { buf[4] };
     Ok((
@@ -316,14 +329,20 @@ mod tests {
         let body = status_body(StatusOp::Edid, 0, &e);
         assert_eq!(body.len(), e.len() + 7);
         assert_eq!(body[0], StatusOp::Edid as u8);
-        assert_eq!(checksum(&body[..body.len() - 2]), u16::from_le_bytes([body[body.len() - 2], body[body.len() - 1]]));
+        assert_eq!(
+            checksum(&body[..body.len() - 2]),
+            u16::from_le_bytes([body[body.len() - 2], body[body.len() - 1]])
+        );
     }
 
     #[test]
     fn status_checksum_trails_body() {
         let body = status_body(StatusOp::Edid, 1, &[0xaa; 4]);
         let sum = checksum(&body[..body.len() - 2]);
-        assert_eq!(u16::from_le_bytes([body[body.len() - 2], body[body.len() - 1]]), sum);
+        assert_eq!(
+            u16::from_le_bytes([body[body.len() - 2], body[body.len() - 1]]),
+            sum
+        );
     }
 }
 
@@ -364,7 +383,7 @@ pub fn template_edid(width_mm: u16, height_mm: u16, name: &str) -> Vec<u8> {
     e[32] = 0x10;
     e[33] = 0x50;
     e[34] = 0x54; // established timings: 640x480@60, 800x600@60, 1024x768@60
-    // Standard timings, all 16:9 and 16:10 at 60 Hz, then unused.
+                  // Standard timings, all 16:9 and 16:10 at 60 Hz, then unused.
     let pairs: [(u16, u16); 8] = [
         (1280, 720),
         (1280, 800),

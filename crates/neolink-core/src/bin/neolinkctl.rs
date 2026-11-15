@@ -3,8 +3,11 @@
 //! `neolinkctl list` prints the desktop as CoreGraphics sees it, `neolinkctl layout` prints the
 //! saved arrangement, and `neolinkctl add` creates a virtual display that lives until Ctrl-C.
 
+use anyhow::Context;
 use anyhow::Result;
-use neolink_core::{agent, displays, dl3, layout, loginitem, transport, vendor, virtual_display};
+use neolink_core::{
+    agent, displays, dl3, layout, loginitem, spkg, transport, vendor, virtual_display,
+};
 use std::time::Duration;
 
 fn usage() -> ! {
@@ -20,6 +23,8 @@ fn usage() -> ! {
          \x20 neolinkctl edid-write F     write an EDID block to the dock\n\
          \x20 neolinkctl agent start|stop|restart\n\
          \x20 neolinkctl vendor status|cache|fetch|expand|install|provision|packs|purge\n\
+         \x20 neolinkctl pack F            parse a vendor .spkg and list its frames\n\
+         \x20 neolinkctl pack F --out D   write F's firmware image to D\n\
          \x20 neolinkctl login on|off|status\n"
     );
     std::process::exit(2)
@@ -33,7 +38,11 @@ fn progress(stage: vendor::Stage, done: u64, total: u64) {
         vendor::Stage::Install => "install",
     };
     if total > 0 {
-        eprint!("\r{label}: {:.1} / {:.1} MiB", done as f64 / 1048576.0, total as f64 / 1048576.0);
+        eprint!(
+            "\r{label}: {:.1} / {:.1} MiB",
+            done as f64 / 1048576.0,
+            total as f64 / 1048576.0
+        );
     } else {
         eprint!("\r{label}: {:.1} MiB", done as f64 / 1048576.0);
     }
@@ -47,17 +56,31 @@ fn vendor_cmd(action: Option<&str>) -> Result<()> {
     match action {
         Some("status") | None => {
             let s = vendor::status();
-            println!("pin:              {} (sha256 {})", vendor::VERSION, &vendor::SHA256[..16]);
-            println!("installed app:    {}", s.installed_version.as_deref().unwrap_or("-"));
+            println!(
+                "pin:              {} (sha256 {})",
+                vendor::VERSION,
+                &vendor::SHA256[..16]
+            );
+            println!(
+                "installed app:    {}",
+                s.installed_version.as_deref().unwrap_or("-")
+            );
             println!("package cached:   {}", s.package_cached);
             println!("expanded payload: {}", s.expanded);
-            println!("cache size:       {:.1} MiB", s.cache_bytes as f64 / 1048576.0);
+            println!(
+                "cache size:       {:.1} MiB",
+                s.cache_bytes as f64 / 1048576.0
+            );
             println!("cache dir:        {}", vendor::paths()?.dir.display());
         }
         Some("cache") => println!("{}", vendor::paths()?.dir.display()),
         Some("fetch") => {
             let path = vendor::fetch(&mut progress)?;
-            println!("verified {} ({:.1} MiB)", path.display(), std::fs::metadata(&path)?.len() as f64 / 1048576.0)
+            println!(
+                "verified {} ({:.1} MiB)",
+                path.display(),
+                std::fs::metadata(&path)?.len() as f64 / 1048576.0
+            )
         }
         Some("expand") => println!("{}", vendor::expand(&mut progress)?.display()),
         Some("install") => {
@@ -117,7 +140,10 @@ fn main() -> Result<()> {
                 ..Default::default()
             };
             let d = virtual_display::VirtualDisplay::new(&cfg)?;
-            println!("virtual display online: id={} (Ctrl-C to remove)", d.display_id());
+            println!(
+                "virtual display online: id={} (Ctrl-C to remove)",
+                d.display_id()
+            );
             loop {
                 std::thread::sleep(Duration::from_secs(1));
             }
@@ -132,7 +158,11 @@ fn main() -> Result<()> {
                     "{:04x}:{:04x} {} bus {} serial {}",
                     d.vendor_id,
                     d.product_id,
-                    if agent::running() { "(agent running)" } else { "(free)" },
+                    if agent::running() {
+                        "(agent running)"
+                    } else {
+                        "(free)"
+                    },
                     d.bus_id,
                     d.serial.as_deref().unwrap_or("-")
                 );
@@ -158,7 +188,11 @@ fn main() -> Result<()> {
                         }
                         println!();
                     }
-                    println!("{} bytes, valid EDID: {}", edid.len(), dl3::valid_edid(&edid));
+                    println!(
+                        "{} bytes, valid EDID: {}",
+                        edid.len(),
+                        dl3::valid_edid(&edid)
+                    );
                 }
             }
         }
@@ -184,6 +218,35 @@ fn main() -> Result<()> {
             }
             _ => usage(),
         },
+        Some("pack") => {
+            let path = std::env::args()
+                .nth(2)
+                .context("pack <file.spkg> [--out DIR]")?;
+            let k = spkg::parse_file(std::path::Path::new(&path))?;
+            let f = k.frames()?;
+            println!(
+                "{} rev={:?} frames={} data={} trailing={}",
+                k.name().unwrap_or_default(),
+                k.text(spkg::Field::Revision),
+                f.frames.len(),
+                f.data().len(),
+                f.rest
+            );
+            if let Some(dir) = std::env::args()
+                .nth(4)
+                .filter(|_| std::env::args().nth(3).as_deref() == Some("--out"))
+            {
+                let stem = std::path::Path::new(&path)
+                    .file_stem()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                let out = std::path::Path::new(&dir).join(format!("{stem}.bin"));
+                let image = f.data();
+                std::fs::write(&out, &image)?;
+                println!("wrote {} bytes to {}", image.len(), out.display());
+            }
+        }
         Some("vendor") => vendor_cmd(std::env::args().nth(2).as_deref())?,
         Some("login") => match std::env::args().nth(2).as_deref() {
             Some("on") => {
@@ -197,14 +260,28 @@ fn main() -> Result<()> {
             _ => println!(
                 "at login: {}{}",
                 loginitem::enabled(),
-                loginitem::bundle().map(|p| format!(" ({})", p.display())).unwrap_or_default()
+                loginitem::bundle()
+                    .map(|p| format!(" ({})", p.display()))
+                    .unwrap_or_default()
             ),
         },
         Some("probe") => {
-            println!("CGVirtualDisplay available: {}", virtual_display::is_available());
-            println!("screen recording allowed:  {}", displays::screen_capture_allowed());
-            println!("vendor agent installed:    {}", neolink_core::agent::installed());
-            println!("vendor XPC reachable:      {}", neolink_core::agent::reachable());
+            println!(
+                "CGVirtualDisplay available: {}",
+                virtual_display::is_available()
+            );
+            println!(
+                "screen recording allowed:  {}",
+                displays::screen_capture_allowed()
+            );
+            println!(
+                "vendor agent installed:    {}",
+                neolink_core::agent::installed()
+            );
+            println!(
+                "vendor XPC reachable:      {}",
+                neolink_core::agent::reachable()
+            );
         }
         Some(_) => usage(),
     }

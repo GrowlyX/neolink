@@ -62,6 +62,10 @@ cargo test -p neolink-core --lib
 `NEOLINK_DEMO=1` (or `2` for the full action path) exercises the app on launch
 without Accessibility permission.
 
+`neolinkctl pack <file.spkg> [--out DIR]` reassembles a dock pack's frames and
+optionally writes the image out; `neolinkctl login on|off|status` manages the
+LaunchAgent.
+
 ## Layout
 
 ```
@@ -71,7 +75,9 @@ crates/neolink-core/src/agent.rs             vendor agent supervision + XPC
 crates/neolink-core/src/layout.rs            profile capture/apply
 crates/neolink-core/src/dl3.rs               DL3 wire format
 crates/neolink-core/src/transport.rs         USB transport
-crates/neolink-core/src/spkg.rs              vendor .spkg container parser
+crates/neolink-core/src/spkg.rs              .spkg container + frame table
+crates/neolink-core/src/bin/spkgdump.rs      inspect a pack's frame table
+crates/neolink-core/src/bin/edidgen.rs       synthesise an EDID for the dock
 crates/neolink-core/src/vendor.rs            pinned package fetch/verify/install
 crates/neolink-app/                          GPUI UI
 ```

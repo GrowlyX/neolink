@@ -10,7 +10,9 @@ pub const LABEL: &str = "ai.neolink.app";
 
 fn plist_path() -> Result<PathBuf> {
     let home = std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
-    Ok(PathBuf::from(home).join("Library/LaunchAgents").join(format!("{LABEL}.plist")))
+    Ok(PathBuf::from(home)
+        .join("Library/LaunchAgents")
+        .join(format!("{LABEL}.plist")))
 }
 
 /// The `.app` this binary lives in, if it was launched from a bundle.

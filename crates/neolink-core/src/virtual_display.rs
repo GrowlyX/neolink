@@ -24,7 +24,11 @@ pub struct VirtualMode {
 
 impl VirtualMode {
     pub fn new(width: u32, height: u32) -> Self {
-        Self { width, height, refresh: 60.0 }
+        Self {
+            width,
+            height,
+            refresh: 60.0,
+        }
     }
     pub fn label(&self) -> String {
         format!("{} × {} @ {:.0} Hz", self.width, self.height, self.refresh)
@@ -89,8 +93,16 @@ impl VirtualDisplay {
         } else {
             cfg.modes.clone()
         };
-        let widest = modes.iter().map(|m| m.width.max(m.height)).max().unwrap_or(1920);
-        let highest = modes.iter().map(|m| m.height.max(m.width)).max().unwrap_or(1080);
+        let widest = modes
+            .iter()
+            .map(|m| m.width.max(m.height))
+            .max()
+            .unwrap_or(1920);
+        let highest = modes
+            .iter()
+            .map(|m| m.height.max(m.width))
+            .max()
+            .unwrap_or(1080);
         let max_pixels = if cfg.hidpi { 2 } else { 1 };
 
         unsafe {
@@ -130,7 +142,11 @@ impl VirtualDisplay {
             if display_id == 0 {
                 bail!("CGVirtualDisplay returned display id 0");
             }
-            Ok(Self { object, settings, display_id })
+            Ok(Self {
+                object,
+                settings,
+                display_id,
+            })
         }
     }
 
@@ -167,16 +183,25 @@ unsafe fn c_release(obj: *mut AnyObject) {
 /// `CGVirtualDisplaySettings.rotation` is accepted but not honoured on macOS 27 (verified: it
 /// stays 0 and the bounds do not change), while swapping the mode dimensions does rotate the
 /// display. So a 90°/270° rotation swaps every mode before it reaches CoreGraphics.
-unsafe fn build_settings(modes: &[VirtualMode], hidpi: bool, rotation: u32) -> Result<Retained<AnyObject>> {
+unsafe fn build_settings(
+    modes: &[VirtualMode],
+    hidpi: bool,
+    rotation: u32,
+) -> Result<Retained<AnyObject>> {
     let raw = alloc_init(class(c"CGVirtualDisplaySettings")?);
     let settings = Retained::from_raw(raw).ok_or_else(|| anyhow!("could not allocate settings"))?;
     let mclass = class(c"CGVirtualDisplayMode")?;
     let mut list: Vec<*mut AnyObject> = Vec::with_capacity(modes.len());
     let sideways = rotation % 180 == 90;
     for m in modes {
-        let (w, h) = if sideways { (m.height, m.width) } else { (m.width, m.height) };
+        let (w, h) = if sideways {
+            (m.height, m.width)
+        } else {
+            (m.width, m.height)
+        };
         let alloc: *mut AnyObject = msg_send![mclass, alloc];
-        let mode: *mut AnyObject = msg_send![alloc, initWithWidth: w, height: h, refreshRate: m.refresh];
+        let mode: *mut AnyObject =
+            msg_send![alloc, initWithWidth: w, height: h, refreshRate: m.refresh];
         if !mode.is_null() {
             list.push(mode);
         }

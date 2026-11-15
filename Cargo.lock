@@ -3290,7 +3290,6 @@ dependencies = [
  "block2",
  "cc",
  "core-foundation 0.10.1",
- "flate2",
  "libc",
  "nusb",
  "objc2",

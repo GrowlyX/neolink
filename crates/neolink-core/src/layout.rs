@@ -12,7 +12,9 @@ use std::path::PathBuf;
 /// Where the arrangement lives. Deliberately inside Application Support so it survives reboots
 /// and is easy to inspect with `neolinkctl layout`.
 pub fn path() -> PathBuf {
-    let base = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let base = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     base.join("Library/Application Support/Neolink/layout.json")
 }
 
@@ -41,7 +43,10 @@ pub struct Profile {
 
 impl Default for Profile {
     fn default() -> Self {
-        Self { version: 1, displays: Vec::new() }
+        Self {
+            version: 1,
+            displays: Vec::new(),
+        }
     }
 }
 
@@ -95,8 +100,14 @@ pub fn apply(profile: &Profile) -> Result<()> {
     let live = displays::list();
     let mut changes = Vec::new();
     for e in &profile.displays {
-        let Some(d) = live.iter().find(|d| d.uuid == e.uuid) else { continue };
-        let mirror = e.mirror_of.as_ref().and_then(|m| live.iter().find(|d| &d.uuid == m)).map(|m| m.id);
+        let Some(d) = live.iter().find(|d| d.uuid == e.uuid) else {
+            continue;
+        };
+        let mirror = e
+            .mirror_of
+            .as_ref()
+            .and_then(|m| live.iter().find(|d| &d.uuid == m))
+            .map(|m| m.id);
         changes.push(displays::Change {
             id: d.id,
             origin: Some((e.x, e.y)),
@@ -120,7 +131,10 @@ pub fn tidy(entries: &mut [Entry]) {
         e.y = 0;
         cursor_x += e.width as i32;
     }
-    let anchor = entries.iter().position(|e| e.main).or(if entries.is_empty() { None } else { Some(0) });
+    let anchor = entries
+        .iter()
+        .position(|e| e.main)
+        .or(if entries.is_empty() { None } else { Some(0) });
     if let Some(anchor) = anchor {
         let dx = entries[anchor].x;
         let dy = entries[anchor].y;
@@ -165,11 +179,19 @@ mod tests {
 
     #[test]
     fn tidy_keeps_mirrored_display_out_of_the_row() {
-        let mut rows = vec![entry("A", 0, None), entry("B", 5000, Some("A")), entry("C", 900, None)];
+        let mut rows = vec![
+            entry("A", 0, None),
+            entry("B", 5000, Some("A")),
+            entry("C", 900, None),
+        ];
         tidy(&mut rows);
         let b = rows.iter().find(|e| e.uuid == "B").unwrap();
         assert_eq!(b.x, 5000, "mirrored entry must not be re-flowed");
-        let xs: Vec<i32> = rows.iter().filter(|e| e.mirror_of.is_none()).map(|e| e.x).collect();
+        let xs: Vec<i32> = rows
+            .iter()
+            .filter(|e| e.mirror_of.is_none())
+            .map(|e| e.x)
+            .collect();
         assert_eq!(xs, vec![0, 1920]);
     }
 

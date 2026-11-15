@@ -70,7 +70,9 @@ pub fn paths() -> Result<Paths> {
 }
 
 fn dir_size(dir: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
     entries
         .filter_map(Result::ok)
         .map(|e| match e.file_type() {
@@ -102,10 +104,17 @@ fn sha256_file(path: &Path) -> Result<String> {
         .output()
         .context("running shasum")?;
     if !out.status.success() {
-        bail!("shasum failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            "shasum failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    let digest = text.split_whitespace().next().unwrap_or_default().to_ascii_lowercase();
+    let digest = text
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     if digest.len() != 64 {
         bail!("unexpected shasum output");
     }
@@ -205,7 +214,10 @@ pub fn expand(progress: Progress) -> Result<PathBuf> {
         .output()
         .context("running pkgutil")?;
     if !out.status.success() {
-        bail!("pkgutil failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            "pkgutil failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     Ok(p.expanded)
 }
@@ -313,6 +325,9 @@ mod tests {
     #[test]
     fn quoting_survives_apostrophes() {
         assert_eq!(shell_quote(Path::new("/tmp/a b/c.pkg")), "'/tmp/a b/c.pkg'");
-        assert_eq!(shell_quote(Path::new("/tmp/it's.pkg")), "'/tmp/it'\\''s.pkg'");
+        assert_eq!(
+            shell_quote(Path::new("/tmp/it's.pkg")),
+            "'/tmp/it'\\''s.pkg'"
+        );
     }
 }

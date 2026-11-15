@@ -9,9 +9,9 @@ use neolink_core::displays::{self, Display, Mode};
 use neolink_core::layout::{self, Entry, Profile};
 use neolink_core::virtual_display::{VirtualDisplay, VirtualDisplayConfig, VirtualMode};
 use neolink_core::{loginitem, vendor};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 
 /// A display as the UI sees it: CoreGraphics truth, plus our own provenance.
 #[derive(Clone, Debug)]
@@ -63,7 +63,6 @@ impl Item {
         let scale = if self.hidpi { " HiDPI" } else { "" };
         format!("{} × {}{}", self.width, self.height, scale)
     }
-
 }
 
 /// A virtual display we created, plus the config that produced it.
@@ -119,7 +118,11 @@ impl AppState {
             .items
             .iter()
             .position(|i| i.main)
-            .or(if state.items.is_empty() { None } else { Some(0) });
+            .or(if state.items.is_empty() {
+                None
+            } else {
+                Some(0)
+            });
         state
     }
 
@@ -150,10 +153,17 @@ impl AppState {
             let mut report = |stage: vendor::Stage, done: u64, total: u64| {
                 let text = match stage {
                     vendor::Stage::Download if total > 0 => {
-                        format!("Downloading DisplayLink: {:.1}/{:.1} MiB", done as f64 / 1048576.0, total as f64 / 1048576.0)
+                        format!(
+                            "Downloading DisplayLink: {:.1}/{:.1} MiB",
+                            done as f64 / 1048576.0,
+                            total as f64 / 1048576.0
+                        )
                     }
                     vendor::Stage::Download => {
-                        format!("Downloading DisplayLink: {:.1} MiB", done as f64 / 1048576.0)
+                        format!(
+                            "Downloading DisplayLink: {:.1} MiB",
+                            done as f64 / 1048576.0
+                        )
                     }
                     vendor::Stage::Verify => "Verifying checksum…".into(),
                     vendor::Stage::Expand => "Expanding package…".into(),
@@ -193,12 +203,20 @@ impl AppState {
     }
 
     pub fn refresh(&mut self) {
-        let vendors = if agent::reachable() { agent::vendor_displays() } else { Vec::new() };
+        let vendors = if agent::reachable() {
+            agent::vendor_displays()
+        } else {
+            Vec::new()
+        };
         let live = displays::list();
 
         // Re-key owned displays to their current UUID; WindowServer may have published one after
         // creation, and the fallback key would otherwise linger forever.
-        let owned_ids: Vec<(String, u32)> = self.owned.iter().map(|(u, o)| (u.clone(), o.vd.display_id())).collect();
+        let owned_ids: Vec<(String, u32)> = self
+            .owned
+            .iter()
+            .map(|(u, o)| (u.clone(), o.vd.display_id()))
+            .collect();
         for (old_uuid, id) in owned_ids {
             if let Some(d) = live.iter().find(|d| d.id == id) {
                 if d.uuid != old_uuid {
@@ -240,8 +258,14 @@ impl AppState {
             }
         }
 
-        let selected_uuid = self.selected.and_then(|i| self.items.get(i)).map(|i| i.uuid.clone());
-        let hovered_uuid = self.hovered.and_then(|i| self.items.get(i)).map(|i| i.uuid.clone());
+        let selected_uuid = self
+            .selected
+            .and_then(|i| self.items.get(i))
+            .map(|i| i.uuid.clone());
+        let hovered_uuid = self
+            .hovered
+            .and_then(|i| self.items.get(i))
+            .map(|i| i.uuid.clone());
 
         items.sort_by_key(|i| (!i.main, i.x, i.y));
         self.selected = selected_uuid.and_then(|u| items.iter().position(|i| i.uuid == u));
@@ -271,7 +295,13 @@ impl AppState {
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        self.owned.insert(uuid.clone(), Owned { vd, cfg: cfg.clone() });
+        self.owned.insert(
+            uuid.clone(),
+            Owned {
+                vd,
+                cfg: cfg.clone(),
+            },
+        );
         self.refresh();
         if let Some(pos) = self.items.iter().position(|i| i.uuid == uuid) {
             self.selected = Some(pos);
@@ -303,7 +333,9 @@ impl AppState {
 
     /// Remove a display and release it back to the system.
     pub fn remove(&mut self, index: usize) -> Result<()> {
-        let Some(item) = self.items.get(index).cloned() else { return Ok(()) };
+        let Some(item) = self.items.get(index).cloned() else {
+            return Ok(());
+        };
         if let Some(o) = self.owned.remove(&item.uuid) {
             let name = item.name.clone();
             drop(o);
@@ -316,17 +348,27 @@ impl AppState {
     /// Enable/disable a display. Vendor-managed docks go through the agent, which keeps the USB
     /// pipeline running; anything else is a CoreGraphics mode round trip.
     pub fn toggle_enabled(&mut self, index: usize) -> Result<()> {
-        let Some(item) = self.items.get(index).cloned() else { return Ok(()) };
+        let Some(item) = self.items.get(index).cloned() else {
+            return Ok(());
+        };
         if let Some(v) = &item.vendor {
             let want = !v.enabled;
             if !agent::vendor_set("enabled", &v.persistent_display_id, want as u8 as f64) {
                 self.refresh();
                 return Err(anyhow!("DisplayLink agent did not apply the change"));
             }
-            self.status = format!("{} “{}”", if want { "Enabled" } else { "Disabled" }, item.name);
+            self.status = format!(
+                "{} “{}”",
+                if want { "Enabled" } else { "Disabled" },
+                item.name
+            );
         } else if let Some(d) = &item.cg {
             if let Some(mode_id) = d.mode.map(|m| m.id) {
-                let changes = vec![displays::Change { id: d.id, mode_id: Some(mode_id), ..Default::default() }];
+                let changes = vec![displays::Change {
+                    id: d.id,
+                    mode_id: Some(mode_id),
+                    ..Default::default()
+                }];
                 displays::apply(&changes, false)?;
             }
         }
@@ -336,7 +378,9 @@ impl AppState {
 
     /// Set vendor brightness or contrast (0.0–1.0) for the selected dock.
     pub fn set_vendor_level(&mut self, index: usize, op: &str, value: f64) -> Result<()> {
-        let Some(item) = self.items.get(index).cloned() else { return Ok(()) };
+        let Some(item) = self.items.get(index).cloned() else {
+            return Ok(());
+        };
         let Some(v) = item.vendor else { return Ok(()) };
         let value = value.clamp(0.0, 1.0);
         if !agent::vendor_set(op, &v.persistent_display_id, value) {
@@ -357,7 +401,9 @@ impl AppState {
 
     /// Flip the vendor framebuffer, for docks mounted upside down.
     pub fn toggle_flip(&mut self, index: usize) -> Result<()> {
-        let Some(item) = self.items.get(index).cloned() else { return Ok(()) };
+        let Some(item) = self.items.get(index).cloned() else {
+            return Ok(());
+        };
         let Some(v) = item.vendor else { return Ok(()) };
         if !agent::vendor_set("flip", &v.persistent_display_id, (!v.flipped) as u8 as f64) {
             self.refresh();
@@ -368,9 +414,15 @@ impl AppState {
     }
 
     pub fn set_origin(&mut self, index: usize, x: i32, y: i32) -> Result<()> {
-        let Some(item) = self.items.get(index).cloned() else { return Ok(()) };
+        let Some(item) = self.items.get(index).cloned() else {
+            return Ok(());
+        };
         if let Some(d) = &item.cg {
-            let changes = vec![displays::Change { id: d.id, origin: Some((x, y)), ..Default::default() }];
+            let changes = vec![displays::Change {
+                id: d.id,
+                origin: Some((x, y)),
+                ..Default::default()
+            }];
             displays::apply(&changes, false)?;
         }
         self.items[index].x = x;
@@ -382,7 +434,9 @@ impl AppState {
     }
 
     pub fn set_main(&mut self, index: usize) -> Result<()> {
-        let Some(item) = self.items.get(index).cloned() else { return Ok(()) };
+        let Some(item) = self.items.get(index).cloned() else {
+            return Ok(());
+        };
         if let Some(d) = &item.cg {
             displays::set_main(d.id, true)?;
         }
@@ -391,7 +445,9 @@ impl AppState {
     }
 
     pub fn set_mode(&mut self, index: usize, mode_id: i32) -> Result<()> {
-        let Some(item) = self.items.get(index).cloned() else { return Ok(()) };
+        let Some(item) = self.items.get(index).cloned() else {
+            return Ok(());
+        };
 
         // Virtual displays get their modes from us, so a change means rewriting the settings
         // object rather than picking a CoreGraphics mode id.
@@ -405,7 +461,11 @@ impl AppState {
         }
 
         if let Some(d) = &item.cg {
-            let changes = vec![displays::Change { id: d.id, mode_id: Some(mode_id), ..Default::default() }];
+            let changes = vec![displays::Change {
+                id: d.id,
+                mode_id: Some(mode_id),
+                ..Default::default()
+            }];
             displays::apply(&changes, true)?;
         }
         self.reassert_virtual(index)?;
@@ -425,8 +485,12 @@ impl AppState {
 
     /// Rebuild a virtual display's settings in place (no flicker, same display id).
     pub fn reconfigure_virtual(&mut self, index: usize, cfg: VirtualDisplayConfig) -> Result<()> {
-        let Some(item) = self.items.get(index).cloned() else { return Ok(()) };
-        let Some(o) = self.owned.get_mut(&item.uuid) else { return Ok(()) };
+        let Some(item) = self.items.get(index).cloned() else {
+            return Ok(());
+        };
+        let Some(o) = self.owned.get_mut(&item.uuid) else {
+            return Ok(());
+        };
         o.vd.reconfigure(&cfg)?;
         o.cfg = cfg.clone();
         self.refresh();
@@ -444,13 +508,19 @@ impl AppState {
     }
 
     pub fn set_mirror(&mut self, index: usize, target: Option<usize>) -> Result<()> {
-        let Some(item) = self.items.get(index).cloned() else { return Ok(()) };
+        let Some(item) = self.items.get(index).cloned() else {
+            return Ok(());
+        };
         let Some(d) = item.cg else { return Ok(()) };
         let master = target
             .and_then(|t| self.items.get(t))
             .and_then(|t| t.cg.as_ref())
             .map(|t| t.id);
-        let changes = vec![displays::Change { id: d.id, mirror_of: Some(master), ..Default::default() }];
+        let changes = vec![displays::Change {
+            id: d.id,
+            mirror_of: Some(master),
+            ..Default::default()
+        }];
         displays::apply(&changes, true)?;
         self.reassert_virtual(index)?;
         self.refresh();
@@ -460,12 +530,15 @@ impl AppState {
     /// One profile entry for an item, resolving the mirror master to its UUID so the record
     /// survives a reconnect (CoreGraphics ids do not).
     fn entry(&self, i: &Item) -> Entry {
-        let mirror_of = i
-            .cg
-            .as_ref()
-            .and_then(|d| d.mirror_of)
-            .and_then(|id| self.items.iter().find(|o| o.cg.as_ref().is_some_and(|c| c.id == id)))
-            .map(|o| o.uuid.clone());
+        let mirror_of =
+            i.cg.as_ref()
+                .and_then(|d| d.mirror_of)
+                .and_then(|id| {
+                    self.items
+                        .iter()
+                        .find(|o| o.cg.as_ref().is_some_and(|c| c.id == id))
+                })
+                .map(|o| o.uuid.clone());
         Entry {
             uuid: i.uuid.clone(),
             name: i.name.clone(),
@@ -488,7 +561,10 @@ impl AppState {
     pub fn tidy(&mut self) -> Result<()> {
         let mut entries: Vec<Entry> = self.items.iter().map(|i| self.entry(i)).collect();
         layout::tidy(&mut entries);
-        let profile = Profile { version: 1, displays: entries };
+        let profile = Profile {
+            version: 1,
+            displays: entries,
+        };
         layout::apply(&profile)?;
 
         // Re-applying a CoreGraphics mode un-rotates a virtual display, so push our settings
@@ -523,8 +599,17 @@ impl AppState {
 
     /// Points of desktop space per canvas point. Mirrors the fit logic in the canvas renderer.
     pub fn canvas_scale(&self) -> f32 {
-        let total_w: f32 = self.items.iter().map(|i| i.width as f32).sum::<f32>().max(1.0);
-        let max_h: f32 = self.items.iter().map(|i| i.height as f32).fold(1.0f32, f32::max);
+        let total_w: f32 = self
+            .items
+            .iter()
+            .map(|i| i.width as f32)
+            .sum::<f32>()
+            .max(1.0);
+        let max_h: f32 = self
+            .items
+            .iter()
+            .map(|i| i.height as f32)
+            .fold(1.0f32, f32::max);
         (520.0 / total_w).min(380.0 / max_h).min(0.22) * self.canvas_zoom
     }
 

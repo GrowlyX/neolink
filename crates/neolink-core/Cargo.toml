@@ -14,7 +14,6 @@ objc2-foundation = "0.3"
 block2 = "0.6"
 core-foundation = "0.10"
 libc = "0.2"
-flate2 = "1"
 
 [build-dependencies]
 cc = "1"

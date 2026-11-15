@@ -103,32 +103,55 @@ one per dock family: firmware plus a synthesised EDID/mode set. They are *not*
 redistributable, which is exactly why Neolink fetches the vendor package at
 runtime instead of embedding them (see `crates/neolink-core/src/vendor.rs`).
 
-Container, from the parser at `0x10020a740` and its strings ("Invalid TLV
-Beginning", "Invalid TLV Body", "Invalid Length for FRAGMENTED_SPKG TLV"):
+Container. The TLV walk is at `0x10020a848`; the three error strings are at
+`0x10020acbc`, `0x10020aca4` and `0x10020aee8`, and the `cmp` against `'FS'`
+that gates the fragmented path is at `0x10020a844`.
 
 ```
-0  "ELLA"
-4  u32 total file size == real length
-8  u16 TLV table offset
-10 u16 TLV table length (<= 0x200000)
-.. records: { u16 index, u16 len, body, 28-byte trailer } on 16-byte boundaries
-.. TLV table: { u16 type, u16 len, body, pad-if-odd }
-.. payload
+0   "ELLA"
+4   u32 total file size == real length
+8   u16 TLV table offset
+10  u16 TLV table length (<= 0x200000)
+..  records: { u16 index, u16 len, body, 28-byte trailer } on 16-byte boundaries
+..  TLV table: { u16 type, u16 len, body, pad-if-odd }
+..  payload, resuming on the next 256-byte boundary after the table
 ```
 
 TLV types the agent maps: `RD` record name, `OW` owner, `RE` revision (8/9 B),
 `RL` release level (1 B), `VE` version (3 B), `DA`/`TI` build date/time, `BD`
-body index, `PT` payload. Records are stored out of order and the `u16 index` is
-the reassembly key; the 20-vs.-20 `PT` body split at offset 0 within each
-fragment line up with the `FRAGMENTED_SPKG` error, i.e. a `PT` fragment continues
-into the next record rather than being self-contained. `Pack::payload()`
-concatenates by index.
+body index, `PT` payload. `FS` is the fragment marker the device path looks for;
+each record body in the shipped packs opens with it. Records are stored out of
+order and the `u16 index` is the reassembly key.
 
-The payload is a zlib stream (Apple `compression_decode_buffer` with
-`COMPRESSION_ZLIB` decodes the head), but it is *continued* by later fragments
-after the TLV table, and record trailers are not a plain SHA-224 of the body —
-neither is enforced. Treat that as the remaining unknown; the container itself
-is fully parsed and covered by tests against all four real packs.
+A `PT` body is `u16 len`, then the first `len` bytes of the stream, then its
+28-byte trailer. A record body is a run of fragments, each `u8 kind`, `u16 len`,
+`len` bytes, closed by its own trailer. Concatenating the `PT` bytes, the bytes
+after the table and the record fragments *in index order* yields the stream,
+which is covered by `spkg::Pack::stream()`.
+
+The stream is a frame table:
+
+```
+u8  kind
+u16 len            counts the 10-byte preamble plus the data
+u8  scratch[7]
+u8  preamble[10]
+u8  data[len - 10]
+```
+
+`kind` is per-fragment noise, not a type. The last frame of every shipped pack is
+cut by the `FRAGMENTED_SPKG` path: its tail lives in the record and the frame
+parses cleanly once spliced. `spkg::Pack::frames()` does that splice and reports
+the remainder.
+
+The data itself is not compressed. Apple `compression_decode_buffer` with
+`COMPRESSION_ZLIB` accepts it and returns it verbatim, which is why earlier
+notes claimed a zlib stream: the "successful decode" was a copy. `flate2`
+rejects it at every offset. What the reassembled bytes mean per dock is still
+unknown — they are high-entropy (≈7.99 B/byte) and contain no EDID magic, so the
+image format on top of the frames is the open item. The container, the splice
+and the frame table are all real and enforced by tests against the four vended
+packs.
 
 ## Vendor package pin
 

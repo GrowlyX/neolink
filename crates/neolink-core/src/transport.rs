@@ -50,7 +50,10 @@ pub fn devices() -> Result<Vec<DeviceDesc>> {
 }
 
 pub fn first() -> Result<DeviceDesc> {
-    devices()?.into_iter().next().ok_or_else(|| anyhow!("no DisplayLink adapter attached"))
+    devices()?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("no DisplayLink adapter attached"))
 }
 
 /// Bulk endpoint addresses discovered from the vendor interface descriptor.
@@ -63,7 +66,9 @@ pub struct Endpoints {
 /// Pick the vendor-specific interface and its bulk pair. Falls back to the
 /// first endpoint of the right direction when a device omits the descriptor
 /// class (some hubs report class `0` before the first `SET_CONFIGURATION`).
-pub fn find_endpoints(config: &nusb::descriptors::ConfigurationDescriptor<'_>) -> Option<Endpoints> {
+pub fn find_endpoints(
+    config: &nusb::descriptors::ConfigurationDescriptor<'_>,
+) -> Option<Endpoints> {
     let mut fallback = None;
     for iface in config.interfaces() {
         let mut out = None;
@@ -104,7 +109,10 @@ pub struct Transport {
 
 impl std::fmt::Debug for Transport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Transport").field("desc", &self.desc).field("eps", &self.eps).finish()
+        f.debug_struct("Transport")
+            .field("desc", &self.desc)
+            .field("eps", &self.eps)
+            .finish()
     }
 }
 
@@ -135,13 +143,23 @@ impl Transport {
             .map(|i| i.interface_number())
             .unwrap_or(0);
         let eps = find_endpoints(&config).ok_or_else(|| anyhow!("no bulk endpoints"))?;
-        let iface = dev.claim_interface(iface_num).wait().context("claiming vendor interface")?;
+        let iface = dev
+            .claim_interface(iface_num)
+            .wait()
+            .context("claiming vendor interface")?;
         let max_payload = iface
             .endpoint::<Bulk, Out>(eps.out)
             .map(|e| e.max_packet_size())
             .unwrap_or(1024)
             .clamp(16, 16384);
-        let mut transport = Self { iface, eps, seq: 0, channel: 1, desc, max_payload };
+        let mut transport = Self {
+            iface,
+            eps,
+            seq: 0,
+            channel: 1,
+            desc,
+            max_payload,
+        };
         transport.handshake()?;
         Ok(transport)
     }
@@ -189,7 +207,10 @@ impl Transport {
 
     /// Read one whole packet: fixed header, then exactly the declared payload.
     fn read_packet(&mut self) -> Result<(dl3::Header, Vec<u8>)> {
-        let mut reader = self.iface.endpoint::<Bulk, In>(self.eps.in_)?.reader(dl3::MAX_STATUS + dl3::HEADER_LEN);
+        let mut reader = self
+            .iface
+            .endpoint::<Bulk, In>(self.eps.in_)?
+            .reader(dl3::MAX_STATUS + dl3::HEADER_LEN);
         use std::io::Read;
         reader.set_read_timeout(TIMEOUT);
         let mut head = [0u8; dl3::HEADER_LEN];
@@ -197,7 +218,9 @@ impl Transport {
         let (parsed, _) = dl3::parse(&head)?;
         let mut payload = vec![0u8; parsed.len as usize];
         if !payload.is_empty() {
-            reader.read_exact(&mut payload).context("bulk read payload")?;
+            reader
+                .read_exact(&mut payload)
+                .context("bulk read payload")?;
         }
         Ok((parsed, payload))
     }
@@ -253,7 +276,8 @@ impl Transport {
     /// Full EDID read, falling back to a synthesised block when the dock answers
     /// `STATUS_OP_EDID not supported on this device` (some units have no pass-through).
     pub fn edid_or_template(&mut self, width_mm: u16, height_mm: u16, name: &str) -> Vec<u8> {
-        self.edid().unwrap_or_else(|_| dl3::template_edid(width_mm, height_mm, name))
+        self.edid()
+            .unwrap_or_else(|_| dl3::template_edid(width_mm, height_mm, name))
     }
 
     /// Full EDID read. Reads the base block first so the extension count can be
@@ -280,7 +304,14 @@ impl Transport {
     }
 
     /// A full frame: tile the damage rectangle and ship each fragment.
-    pub fn frame(&mut self, x: u16, y: u16, w: u16, h: u16, pixel: impl Fn(usize) -> &'static [u8]) -> Result<usize> {
+    pub fn frame(
+        &mut self,
+        x: u16,
+        y: u16,
+        w: u16,
+        h: u16,
+        pixel: impl Fn(usize) -> &'static [u8],
+    ) -> Result<usize> {
         let heads = dl3::fragment(&mut self.seq, x, y, w, h, self.max_payload);
         let mut bytes_sent = 0;
         for (i, head) in heads.iter().enumerate() {
@@ -306,5 +337,4 @@ mod tests {
     fn vendor_id_matches_synaptics() {
         assert_eq!(VENDOR_ID, 0x17e9);
     }
-
 }

@@ -7,7 +7,7 @@
 use crate::theme;
 use crate::ui;
 use gpui::prelude::*;
-use gpui::{Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Window, div, px};
+use gpui::{div, px, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Window};
 
 /// Points of desktop space per canvas point, before zoom.
 const CANVAS_PAD: f32 = 28.0;
@@ -57,20 +57,26 @@ impl crate::Neolink {
                     .right(px(12.0))
                     .flex()
                     .gap_1()
-                    .child(ui::pill("zoom-out", "−", false).on_click(cx.listener(|this, _, _, cx| {
-                        this.state.scale_step(-0.1);
-                        cx.notify();
-                    })))
-                    .child(ui::pill("zoom-in", "+", false).on_click(cx.listener(|this, _, _, cx| {
-                        this.state.scale_step(0.1);
-                        cx.notify();
-                    })))
-                    .child(ui::pill("tidy", "Tidy", false).on_click(cx.listener(|this, _, _, cx| {
-                        if let Err(e) = this.state.tidy() {
-                            this.state.status = format!("Tidy failed: {e}");
-                        }
-                        cx.notify();
-                    }))),
+                    .child(ui::pill("zoom-out", "−", false).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.state.scale_step(-0.1);
+                            cx.notify();
+                        },
+                    )))
+                    .child(ui::pill("zoom-in", "+", false).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.state.scale_step(0.1);
+                            cx.notify();
+                        },
+                    )))
+                    .child(ui::pill("tidy", "Tidy", false).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            if let Err(e) = this.state.tidy() {
+                                this.state.status = format!("Tidy failed: {e}");
+                            }
+                            cx.notify();
+                        },
+                    ))),
             );
 
         // Backdrop dot grid, drawn as a cheap repeating pattern of small squares.
@@ -105,7 +111,11 @@ impl crate::Neolink {
                     .w(px(w))
                     .h(px(h))
                     .rounded(px(10.0))
-                    .bg(if selected { theme::with_alpha(theme::ACCENT, 0.13) } else { theme::GLASS_SOFT })
+                    .bg(if selected {
+                        theme::with_alpha(theme::ACCENT, 0.13)
+                    } else {
+                        theme::GLASS_SOFT
+                    })
                     .border_1()
                     .border_color(if selected { swatch } else { theme::HAIRLINE })
                     .cursor_move()
@@ -130,7 +140,7 @@ impl crate::Neolink {
                             if e.pressed_button.is_none() {
                                 return;
                             }
-                                                    let ex: f32 = e.position.x.into();
+                            let ex: f32 = e.position.x.into();
                             let ey: f32 = e.position.y.into();
                             let dx = ex - dr.mouse_x;
                             let dy = ey - dr.mouse_y;
@@ -219,8 +229,18 @@ impl crate::Neolink {
                     .items_center()
                     .justify_center()
                     .gap_2()
-                    .child(div().text_sm().text_color(theme::TEXT_DIM).child("No displays"))
-                    .child(div().text_xs().text_color(theme::TEXT_FAINT).child("Attach a dock or add a virtual display")),
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::TEXT_DIM)
+                            .child("No displays"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::TEXT_FAINT)
+                            .child("Attach a dock or add a virtual display"),
+                    ),
             );
         }
 

@@ -69,7 +69,11 @@ extern "C" {
         mode: CGDisplayModeRef,
         options: CFDictionaryRef,
     ) -> i32;
-    fn CGConfigureDisplayMirrorOfDisplay(cfg: CGDisplayConfigRef, d: DisplayId, master: DisplayId) -> i32;
+    fn CGConfigureDisplayMirrorOfDisplay(
+        cfg: CGDisplayConfigRef,
+        d: DisplayId,
+        master: DisplayId,
+    ) -> i32;
     fn CGCompleteDisplayConfiguration(cfg: CGDisplayConfigRef, option: u32) -> i32;
     fn CGCancelDisplayConfiguration(cfg: CGDisplayConfigRef) -> i32;
     fn CGDisplayRegisterReconfigurationCallback(
@@ -115,7 +119,11 @@ impl Mode {
         self.pixel_width > self.width
     }
     pub fn label(&self) -> String {
-        let hz = if self.refresh > 0.0 { format!(" @ {:.0} Hz", self.refresh) } else { String::new() };
+        let hz = if self.refresh > 0.0 {
+            format!(" @ {:.0} Hz", self.refresh)
+        } else {
+            String::new()
+        };
         let hi = if self.hidpi() { " HiDPI" } else { "" };
         format!("{} × {}{}{}", self.width, self.height, hz, hi)
     }
@@ -198,7 +206,8 @@ fn name_of(id: DisplayId, builtin: bool) -> String {
             let f: InfoFn = std::mem::transmute(sym);
             let d = f(id);
             if !d.is_null() {
-                let dict: CFDictionary<CFString, CFType> = CFDictionary::wrap_under_create_rule(d as _);
+                let dict: CFDictionary<CFString, CFType> =
+                    CFDictionary::wrap_under_create_rule(d as _);
                 if let Some(names) = dict.find(CFString::from_static_string("DisplayProductName")) {
                     if let Some(names) = names.downcast::<CFDictionary>() {
                         let (_, vals) = names.get_keys_and_values();
@@ -275,7 +284,9 @@ fn with_modes<T>(id: DisplayId, f: impl FnOnce(&[CGDisplayModeRef]) -> T) -> T {
             return f(&[]);
         }
         let n = CFArrayGetCount(arr);
-        let refs: Vec<CGDisplayModeRef> = (0..n).map(|i| CFArrayGetValueAtIndex(arr, i) as CGDisplayModeRef).collect();
+        let refs: Vec<CGDisplayModeRef> = (0..n)
+            .map(|i| CFArrayGetValueAtIndex(arr, i) as CGDisplayModeRef)
+            .collect();
         let r = f(&refs);
         CFRelease(arr);
         r
@@ -291,10 +302,18 @@ pub fn modes(id: DisplayId) -> Vec<Mode> {
             .collect()
     });
     v.sort_by(|a, b| {
-        (b.width, b.height, b.hidpi(), b.refresh.round() as i64).cmp(&(a.width, a.height, a.hidpi(), a.refresh.round() as i64))
+        (b.width, b.height, b.hidpi(), b.refresh.round() as i64).cmp(&(
+            a.width,
+            a.height,
+            a.hidpi(),
+            a.refresh.round() as i64,
+        ))
     });
     v.dedup_by(|a, b| {
-        a.width == b.width && a.height == b.height && a.hidpi() == b.hidpi() && a.refresh.round() == b.refresh.round()
+        a.width == b.width
+            && a.height == b.height
+            && a.hidpi() == b.hidpi()
+            && a.refresh.round() == b.refresh.round()
     });
     v
 }
@@ -326,7 +345,10 @@ pub fn apply(changes: &[Change], permanent: bool) -> Result<()> {
     let online = online_ids();
     unsafe {
         let mut cfg: CGDisplayConfigRef = std::ptr::null_mut();
-        check(CGBeginDisplayConfiguration(&mut cfg), "CGBeginDisplayConfiguration")?;
+        check(
+            CGBeginDisplayConfiguration(&mut cfg),
+            "CGBeginDisplayConfiguration",
+        )?;
         let run = || -> Result<()> {
             for c in changes {
                 if !online.contains(&c.id) {
@@ -336,7 +358,9 @@ pub fn apply(changes: &[Change], permanent: bool) -> Result<()> {
                     let r = with_modes(c.id, |refs| {
                         refs.iter()
                             .find(|m| CGDisplayModeGetIODisplayModeID(**m) == mode_id)
-                            .map(|m| CGConfigureDisplayWithDisplayMode(cfg, c.id, *m, std::ptr::null()))
+                            .map(|m| {
+                                CGConfigureDisplayWithDisplayMode(cfg, c.id, *m, std::ptr::null())
+                            })
                     });
                     match r {
                         Some(code) => check(code, "setting display mode")?,
@@ -345,12 +369,19 @@ pub fn apply(changes: &[Change], permanent: bool) -> Result<()> {
                 }
                 if let Some(m) = c.mirror_of {
                     check(
-                        CGConfigureDisplayMirrorOfDisplay(cfg, c.id, m.unwrap_or(K_CG_NULL_DISPLAY)),
+                        CGConfigureDisplayMirrorOfDisplay(
+                            cfg,
+                            c.id,
+                            m.unwrap_or(K_CG_NULL_DISPLAY),
+                        ),
                         "configuring mirroring",
                     )?;
                 }
                 if let Some((x, y)) = c.origin {
-                    check(CGConfigureDisplayOrigin(cfg, c.id, x, y), "setting display origin")?;
+                    check(
+                        CGConfigureDisplayOrigin(cfg, c.id, x, y),
+                        "setting display origin",
+                    )?;
                 }
             }
             Ok(())
@@ -359,20 +390,34 @@ pub fn apply(changes: &[Change], permanent: bool) -> Result<()> {
             CGCancelDisplayConfiguration(cfg);
             return Err(e);
         }
-        let opt = if permanent { CONFIGURE_PERMANENTLY } else { CONFIGURE_FOR_SESSION };
-        check(CGCompleteDisplayConfiguration(cfg, opt), "CGCompleteDisplayConfiguration")
+        let opt = if permanent {
+            CONFIGURE_PERMANENTLY
+        } else {
+            CONFIGURE_FOR_SESSION
+        };
+        check(
+            CGCompleteDisplayConfiguration(cfg, opt),
+            "CGCompleteDisplayConfiguration",
+        )
     }
 }
 
 /// Make `id` the main display (menu bar, origin 0,0) keeping the relative arrangement.
 pub fn set_main(id: DisplayId, permanent: bool) -> Result<()> {
     let all = list();
-    let target = all.iter().find(|d| d.id == id).ok_or_else(|| anyhow!("display {id} is not connected"))?;
+    let target = all
+        .iter()
+        .find(|d| d.id == id)
+        .ok_or_else(|| anyhow!("display {id} is not connected"))?;
     let (dx, dy) = (target.x, target.y);
     let changes: Vec<Change> = all
         .iter()
         .filter(|d| d.mirror_of.is_none())
-        .map(|d| Change { id: d.id, origin: Some((d.x - dx, d.y - dy)), ..Default::default() })
+        .map(|d| Change {
+            id: d.id,
+            origin: Some((d.x - dx, d.y - dy)),
+            ..Default::default()
+        })
         .collect();
     apply(&changes, permanent)
 }

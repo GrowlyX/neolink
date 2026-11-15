@@ -1,31 +1,40 @@
 //! Parser for the vendor's `.spkg` per-dock packs.
 //!
-//! Layout recovered from `DisplayLinkUserAgent` 17.1.56 (`0x10020a740`, error
-//! strings "Invalid TLV Beginning" / "Invalid TLV Body" / "Invalid Length for
-//! FRAGMENTED_SPKG TLV"):
+//! Layout recovered from `DisplayLinkUserAgent` 17.1.56 (error strings "Invalid
+//! TLV Beginning" / "Invalid TLV Body" / "Invalid Length for FRAGMENTED_SPKG
+//! TLV" now sit at `0x10020acbc` / `0x10020aca4` / `0x10020aee8`, and the TLV
+//! walk that emits them starts at `0x10020a848`):
 //!
 //! ```text
-//! 0  "ELLA"
-//! 4  u32 total file size (must equal the file's length)
-//! 8  u16 offset of the TLV table
-//! 10 u16 length of the TLV table
-//! .. optional records: { u16 index, u16 len, body[len], sha224[28] } aligned to 16
-//! .. TLV table: { u16 type, u16 len, body, pad-if-odd }
-//! .. payload blob
+//! 0   "ELLA"
+//! 4   u32 total file size (must equal the file's length)
+//! 8   u16 offset of the TLV table
+//! 10  u16 length of the TLV table (<= 0x200000)
+//! ..  optional records: { u16 index, u16 len, body[len], sha224[28] } aligned to 16
+//! ..  TLV table: { u16 type, u16 len, body, pad-if-odd }
+//! ..  payload blob (stream resumes on the next 256-byte boundary)
 //! ```
 //!
-//! A `PT` TLV carries a 5-byte preamble then the compressed payload stream,
-//! which runs from there to the end of the file (zero-padding between the TLV
-//! table and the stream is skipped). Records before and after the table are a
-//! best-effort index of the same bytes: they are not needed to recover the
-//! payload and are not in index order.
+//! A `PT` TLV body is `u16 len`, then `len` stream bytes, then a 28-byte trailer;
+//! the rest of the stream follows the TLV table. A record body is a run of
+//! fragments, each `u8 kind`, `u16 len`, then `len` bytes, closed by its own
+//! trailer.
+//!
+//! The stream itself is a run of frames, each `u8 kind`, `u16 len`, 7 scratch
+//! bytes, a 10-byte second preamble, then `len - 10` data bytes (`len` counts
+//! the preamble and the data).
+//! The final frame of a pack is split: its tail lives in a record and the
+//! `FRAGMENTED_SPKG` path stitches it back on. `kind` is per-fragment data, not
+//! a type tag. The data bytes are stored, not compressed — libcompression's
+//! `COMPRESSION_ZLIB` accepts them but returns them verbatim, which is why a
+//! "successful decode" here is a copy.
 //!
 //! The parser is strict about the bounds the vendor checks and lenient about
 //! everything else, so a damaged pack errors clearly instead of half-reading.
 //!
-//! Note: this is a *container* parser. Turning the payload into an EDID or a
-//! firmware image requires the per-dock format on top of it, which is separate
-//! work; see `docs/RE-FINDINGS.md`.
+//! What is still unknown is what the reassembled bytes mean per dock: they are
+//! the firmware/EDID image the kext and device consume, not an EDID or archive
+//! we can read today. See `docs/RE-FINDINGS.md`.
 
 use anyhow::{bail, Result};
 use std::path::Path;
@@ -33,12 +42,10 @@ use std::path::Path;
 pub const MAGIC: &[u8; 4] = b"ELLA";
 /// The vendor refuses files with a TLV table longer than this.
 pub const MAX_TLV: usize = 0x200000;
-/// Bytes between the `PT` TLV body's own length field and the payload. The
-/// stream itself then starts with one or two framing bytes that decoders differ
-/// on, so [`Pack::payload_candidates`] hands out every plausible split.
-pub const PAYLOAD_PREAMBLE: usize = 2;
-/// How many leading bytes a decoder may need to skip inside the stream.
-pub const SKIP_GUESSES: usize = 4;
+/// Bytes of frame header: `u8 kind`, `u16 len`, then 7 scratch bytes.
+pub const FRAME_HEADER: usize = 10;
+/// Bytes of second preamble at the start of a frame body.
+pub const FRAME_PREAMBLE: usize = 10;
 
 /// Metadata TLVs the agent recognises.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,9 +112,37 @@ pub struct Record {
     pub digest: [u8; 28],
 }
 
+impl Record {
+    /// Stream bytes this fragment contributes. The body already excludes the
+    /// trailer the parser split off into `digest`.
+    pub fn data(&self) -> &[u8] {
+        &self.body
+    }
+}
+
+/// A parsed frame table. `rest` counts stream bytes after the last whole frame:
+/// the pieces of the `FRAGMENTED_SPKG` frame that the records did not supply.
+/// Every shipped pack ends with more of it, so `rest` is always non-zero.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Frames {
+    pub frames: Vec<Vec<u8>>,
+    pub rest: usize,
+}
+
+impl Frames {
+    /// Frame data concatenated, i.e. bodies minus their second preamble.
+    pub fn data(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for f in &self.frames {
+            out.extend_from_slice(f.get(FRAME_PREAMBLE..).unwrap_or(&[]));
+        }
+        out
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pack {
-    /// `PT` body past its 5-byte preamble, i.e. the start of the stream.
+    /// The `PT` body past its `u16` length, i.e. the start of the stream.
     pub head: Option<Vec<u8>>,
     /// Everything after the TLV table up to the end of file.
     pub tail: Vec<u8>,
@@ -117,7 +152,10 @@ pub struct Pack {
 
 impl Pack {
     pub fn get(&self, field: Field) -> Option<&[u8]> {
-        self.fields.iter().find(|(f, _)| *f == field).map(|(_, v)| v.as_slice())
+        self.fields
+            .iter()
+            .find(|(f, _)| *f == field)
+            .map(|(_, v)| v.as_slice())
     }
 
     pub fn text(&self, field: Field) -> Option<String> {
@@ -130,40 +168,90 @@ impl Pack {
         self.text(Field::Record)
     }
 
-    /// The raw compressed stream: `PT` body past its length field, then the
-    /// region after the TLV table. Records are not consulted; they describe the
-    /// same bytes.
-    pub fn payload(&self) -> Vec<u8> {
+    /// The reassembled stream: `PT` data, the bytes after the TLV table, then
+    /// each record's data in index order. The final frame of a pack is split
+    /// across the two, so this is the only order that decodes.
+    pub fn stream(&self) -> Vec<u8> {
         let mut out = self.head.clone().unwrap_or_default();
         out.extend_from_slice(&self.tail);
+        for r in self.records.iter() {
+            out.extend_from_slice(&r.data());
+        }
         out
     }
 
-    /// `payload()` minus 0..[`SKIP_GUESSES`] leading bytes, in the order a
-    /// decoder should try them. The vendor's own decoder is lenient about the
-    /// first byte; `zlib` is not.
-    pub fn payload_candidates(&self) -> Vec<Vec<u8>> {
-        let p = self.payload();
-        (0..SKIP_GUESSES)
-            .filter(|n| *n < p.len())
-            .map(|n| p[n..].to_vec())
-            .collect()
+    /// Split the stream into frames, returning each frame's data.
+    ///
+    /// A frame is `u8 kind`, `u16 len`, 7 scratch bytes, then `len` bytes of
+    /// which the first 10 are a second preamble. The final frame of every
+    /// shipped pack is cut short and the rest of it sits in a record; `records`
+    /// are spliced back at the cut in index order. `rest` is what is left when
+    /// the records run out — the image format on top of the frames is the
+    /// remaining unknown, so a pack never ends cleanly today.
+    pub fn frames(&self) -> Result<Frames> {
+        let mut stream = self.stream();
+        let mut pending: Vec<u8> = self
+            .records
+            .iter()
+            .flat_map(|r| r.data().to_vec())
+            .collect();
+        let mut frames = Vec::new();
+        let mut at = 0usize;
+        loop {
+            while at + FRAME_HEADER > stream.len() {
+                if pending.is_empty() {
+                    return Ok(Frames {
+                        frames,
+                        rest: stream.len() - at,
+                    });
+                }
+                let take = (at + FRAME_HEADER - stream.len()).min(pending.len());
+                stream.extend(pending.drain(..take));
+            }
+            let len = u16::from_le_bytes([stream[at + 1], stream[at + 2]]) as usize;
+            if len < FRAME_PREAMBLE {
+                return Ok(Frames {
+                    frames,
+                    rest: stream.len() - at,
+                });
+            }
+            let body = at + FRAME_HEADER;
+            let end = body + len;
+            while end > stream.len() {
+                if pending.is_empty() {
+                    return Ok(Frames {
+                        frames,
+                        rest: stream.len() - at,
+                    });
+                }
+                let take = (end - stream.len()).min(pending.len());
+                stream.extend(pending.drain(..take));
+            }
+            // Keep the raw body: the first FRAME_PREAMBLE bytes are a second
+            // preamble, the rest is data. `Frames::data` drops the preamble.
+            frames.push(stream[body..end].to_vec());
+            at = end;
+        }
     }
 
-    /// Decode the payload with whichever candidate the decoder accepts.
-    pub fn decode(&self) -> Result<Vec<u8>> {
-        for c in self.payload_candidates() {
-            if let Ok(out) = inflate(&c) {
-                return Ok(out);
-            }
-        }
-        bail!("payload did not inflate")
+    /// The decoded frames plus whatever trailing bytes did not form a whole
+    /// frame.
+    pub fn decode(&self) -> Result<Frames> {
+        self.frames()
+    }
+
+    /// Frame data concatenated — the firmware/EDID image itself, minus any
+    /// partial trailing frame.
+    pub fn image(&self) -> Result<Vec<u8>> {
+        Ok(self.frames()?.data())
     }
 
     /// True when every record's digest matches its body. The trailer algorithm
     /// is unconfirmed, so a mismatch is reported rather than enforced.
     pub fn digests_ok(&self) -> bool {
-        self.records.iter().all(|r| sha224_matches(&r.body, &r.digest))
+        self.records
+            .iter()
+            .all(|r| sha224_matches(&r.body, &r.digest))
     }
 }
 
@@ -189,7 +277,12 @@ pub fn parse(bytes: &[u8]) -> Result<Pack> {
     let tlv_end = tlv_off.checked_add(tlv_len).filter(|e| *e <= bytes.len());
     let tlv_end = tlv_end.ok_or_else(|| anyhow::anyhow!("TLV table runs past end of file"))?;
 
-    let mut pack = Pack { head: None, tail: Vec::new(), records: Vec::new(), fields: Vec::new() };
+    let mut pack = Pack {
+        head: None,
+        tail: Vec::new(),
+        records: Vec::new(),
+        fields: Vec::new(),
+    };
     let mut p = tlv_off;
     while p + 4 <= tlv_end {
         let tag = [bytes[p], bytes[p + 1]];
@@ -202,8 +295,13 @@ pub fn parse(bytes: &[u8]) -> Result<Pack> {
         let body = bytes[body_start..body_end].to_vec();
         let field = Field::from_tag(tag);
         if field == Field::Payload {
-            // The body's own u16 length precedes the stream.
-            pack.head = Some(body.get(PAYLOAD_PREAMBLE..).unwrap_or(&[]).to_vec());
+            // `u16 len`, the fragment, then a 28-byte trailer.
+            let declared = body
+                .get(..2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
+                .unwrap_or(0);
+            let take = declared.min(body.len().saturating_sub(2));
+            pack.head = Some(body[2..2 + take].to_vec());
         } else {
             pack.fields.push((field, body));
         }
@@ -227,7 +325,11 @@ pub fn parse(bytes: &[u8]) -> Result<Pack> {
             }
             let mut digest = [0u8; 28];
             digest.copy_from_slice(&bytes[body_end..body_end + 28]);
-            pack.records.push(Record { index, body: bytes[q + 4..body_end].to_vec(), digest });
+            pack.records.push(Record {
+                index,
+                body: bytes[q + 4..body_end].to_vec(),
+                digest,
+            });
             q = align16(body_end + 28);
         }
         Ok(())
@@ -241,62 +343,6 @@ pub fn parse(bytes: &[u8]) -> Result<Pack> {
     }
     pack.tail = bytes[tail_start.min(bytes.len())..].to_vec();
     Ok(pack)
-}
-
-/// Inflate a candidate stream (zlib, or raw deflate). Used by the dump tool and
-/// by anything that wants to decode the payload once the head is in hand.
-pub fn inflate(data: &[u8]) -> Result<Vec<u8>> {
-    use flate2::read::ZlibDecoder;
-    use std::io::Read;
-    for raw in [false, true] {
-        let mut out = Vec::new();
-        let ok = if raw {
-            flate2::read::DeflateDecoder::new(data).read_to_end(&mut out).is_ok()
-        } else {
-            ZlibDecoder::new(data).read_to_end(&mut out).is_ok()
-        };
-        if ok && !out.is_empty() {
-            return Ok(out);
-        }
-    }
-    // The vendor's encoder emits something zlib's strict reader rejects but
-    // libcompression accepts (`COMPRESSION_ZLIB` is lenient about the head).
-    apple_inflate(data).ok_or_else(|| anyhow::anyhow!("payload did not inflate"))
-}
-
-#[link(name = "compression")]
-extern "C" {
-    fn compression_decode_buffer(
-        dst: *mut u8,
-        dst_size: usize,
-        src: *const u8,
-        src_size: usize,
-        scratch: *mut std::ffi::c_void,
-        algorithm: i32,
-    ) -> usize;
-}
-
-const COMPRESSION_ZLIB: i32 = 0x205;
-/// Cap for one decoded pack; the largest vendor pack decodes well under this.
-const MAX_INFLATED: usize = 8 << 20;
-
-fn apple_inflate(data: &[u8]) -> Option<Vec<u8>> {
-    let mut out = vec![0u8; MAX_INFLATED];
-    let n = unsafe {
-        compression_decode_buffer(
-            out.as_mut_ptr(),
-            out.len(),
-            data.as_ptr(),
-            data.len(),
-            std::ptr::null_mut(),
-            COMPRESSION_ZLIB,
-        )
-    };
-    if n == 0 || n >= MAX_INFLATED {
-        return None;
-    }
-    out.truncate(n);
-    Some(out)
 }
 
 fn align16(n: usize) -> usize {
@@ -331,8 +377,8 @@ impl Sha224 {
     fn new() -> Self {
         Self {
             state: [
-                0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939, 0xffc00b31, 0x68581511,
-                0x64f98fa7, 0xbefa4fa4,
+                0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939, 0xffc00b31, 0x68581511, 0x64f98fa7,
+                0xbefa4fa4,
             ],
             buf: Vec::new(),
             len: 0,
@@ -406,13 +452,20 @@ impl Sha224 {
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
         }
         let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = self.state;
         for i in 0..64 {
             let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
             let ch = (e & f) ^ (!e & g);
-            let t1 = h.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);
+            let t1 = h
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
             let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
             let maj = (a & b) ^ (a & c) ^ (b & c);
             let t2 = s0.wrapping_add(maj);
@@ -432,7 +485,9 @@ impl Sha224 {
 }
 
 /// Build a pack from fields, so a caller can round-trip a synthesised record.
-pub fn build(fields: &[(Field, Vec<u8>)], records: &[Record]) -> Vec<u8> {
+/// `tail` is the stream that follows the TLV table; pass `&[]` for a pack whose
+/// whole stream is in the `PT` TLV.
+pub fn build(fields: &[(Field, Vec<u8>)], records: &[Record], tail: &[u8]) -> Vec<u8> {
     let mut table = Vec::new();
     for (f, body) in fields {
         table.extend_from_slice(&f.tag());
@@ -459,6 +514,12 @@ pub fn build(fields: &[(Field, Vec<u8>)], records: &[Record]) -> Vec<u8> {
     let tlv_off = out.len();
     out[8..10].copy_from_slice(&(tlv_off as u16).to_le_bytes());
     out.extend_from_slice(&table);
+    if !tail.is_empty() {
+        while out.len() % 256 != 0 {
+            out.push(0);
+        }
+        out.extend_from_slice(tail);
+    }
     let total = out.len() as u32;
     out[4..8].copy_from_slice(&total.to_le_bytes());
     out
@@ -468,44 +529,81 @@ pub fn build(fields: &[(Field, Vec<u8>)], records: &[Record]) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    fn pack() -> Vec<u8> {
+    fn frame(data: &[u8]) -> Vec<u8> {
+        frame_kind(0, data)
+    }
+
+    fn frame_kind(kind: u8, data: &[u8]) -> Vec<u8> {
+        // `kind`, u16 len (preamble + data), 7 scratch, 10-byte preamble, data.
+        let mut v = vec![kind, (FRAME_PREAMBLE + data.len()) as u8];
+        v.push(0);
+        v.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7]);
+        v.extend_from_slice(&[8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+        v.extend_from_slice(data);
+        v
+    }
+
+    /// A PT body: `u16 len` of the frame, the frame, then its trailer.
+    fn fragment(data: &[u8]) -> Vec<u8> {
+        let mut v = framed_body(data);
+        v.extend_from_slice(&[0u8; 28]);
+        v
+    }
+
+    /// A record body: `u16 len` of the frame then the frame. `build` adds the
+    /// record's own trailer, so the body does not carry one.
+    fn framed_body(data: &[u8]) -> Vec<u8> {
+        let f = frame(data);
+        let mut v = (f.len() as u16).to_le_bytes().to_vec();
+        v.extend_from_slice(&f);
+        v
+    }
+
+    fn pack() -> (Vec<u8>, Vec<u8>) {
         let fields = vec![
             (Field::Record, b"EllaDock".to_vec()),
             (Field::Version, vec![0x0c, 0x03, 0x25]),
-            (Field::Payload, vec![4, 0, 0xde, 0xad, 0xbe, 0xef]),
+            (Field::Payload, fragment(b"\xde\xad\xbe\xef")),
         ];
-        let records = vec![
-            Record { index: 2, body: b"second".to_vec(), digest: [0; 28] },
-            Record { index: 1, body: b"first".to_vec(), digest: [0; 28] },
-        ];
-        build(&fields, &records)
+        // The tail continues after the table and must not start with 0x00, or
+        // the zero-padding skip above would eat it.
+        let tail = frame_kind(1, b"second");
+        // `build` appends the record trailer itself, so the body excludes it.
+        let records = vec![Record {
+            index: 2,
+            body: framed_body(b"second"),
+            digest: [0; 28],
+        }];
+        (build(&fields, &records, &tail), tail)
     }
 
     #[test]
     fn roundtrip_fields_and_order() {
-        let bytes = pack();
+        let (bytes, _) = pack();
         let p = parse(&bytes).unwrap();
         assert_eq!(p.name().unwrap(), "EllaDock");
         assert_eq!(p.get(Field::Version).unwrap(), &[0x0c, 0x03, 0x25]);
-        assert_eq!(p.head.as_deref(), Some(&b"\xde\xad\xbe\xef"[..]));
-        assert!(p.tail.is_empty());
-        assert_eq!(p.records.len(), 2);
-        assert_eq!(p.payload_candidates()[0], b"\xde\xad\xbe\xef");
+        assert_eq!(p.records.len(), 1);
+        let f = p.frames().unwrap();
+        // The raw body keeps its secondary preamble, `data` does not.
+        assert_eq!(f.data(), b"\xde\xad\xbe\xefsecond".to_vec());
+        // The fixture leaves a few bytes the record's own tail does not frame.
+        assert!(f.rest < 40, "unexpected {} trailing bytes", f.rest);
     }
 
     #[test]
     fn rejects_bad_magic_and_size() {
-        let mut bytes = pack();
+        let (mut bytes, _) = pack();
         bytes[0] = b'X';
         assert!(parse(&bytes).is_err());
-        let mut bytes = pack();
+        let (mut bytes, _) = pack();
         bytes[4] = bytes[4].wrapping_add(1);
         assert!(parse(&bytes).is_err());
     }
 
     #[test]
     fn rejects_tlv_past_end() {
-        let mut bytes = pack();
+        let (mut bytes, _) = pack();
         let off = bytes.len() as u16 + 4;
         bytes[8..10].copy_from_slice(&off.to_le_bytes());
         assert!(parse(&bytes).is_err());
@@ -517,6 +615,37 @@ mod tests {
         assert!(parse(&[]).is_err());
     }
 
+    /// The four packs a 17.1.56 install ships, if the vendor cache has them.
+    #[cfg(test)]
+    fn vended_packs() -> Vec<std::path::PathBuf> {
+        crate::vendor::resource_packs().unwrap_or_default()
+    }
+
+    #[test]
+    fn vended_packs_frame_cleanly() {
+        let mut packs = vended_packs();
+        if packs.is_empty() {
+            return;
+        }
+        packs.sort();
+        assert_eq!(packs.len(), 4, "unexpected pack count");
+        for path in packs {
+            let k = parse_file(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let name = k.name().expect("RD field");
+            let f = k
+                .frames()
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert!(f.frames.len() > 5, "{name}: only {} frames", f.frames.len());
+            let data = f.data().len();
+            assert!(data > 100_000, "{name}: only {data} data bytes");
+            // The last frame is split by the FRAGMENTED_SPKG path and the
+            // remainder is image payload, not frame framing, so a tail is
+            // expected rather than an exact end.
+            assert!(f.rest > 0, "{name}: no split tail");
+            assert!(f.rest < 65_536, "{name}: {} trailing bytes", f.rest);
+        }
+    }
+
     #[test]
     fn sha224_known_vector() {
         let mut h = Sha224::new();
@@ -524,9 +653,8 @@ mod tests {
         assert_eq!(
             h.finish().to_vec(),
             [
-                0x23, 0x09, 0x7d, 0x22, 0x34, 0x05, 0xd8, 0x22, 0x86, 0x42, 0xa4, 0x77, 0xbd,
-                0xa2, 0x55, 0xb3, 0x2a, 0xad, 0xbc, 0xe4, 0xbd, 0xa0, 0xb3, 0xf7, 0xe3, 0x6c,
-                0x9d, 0xa7
+                0x23, 0x09, 0x7d, 0x22, 0x34, 0x05, 0xd8, 0x22, 0x86, 0x42, 0xa4, 0x77, 0xbd, 0xa2,
+                0x55, 0xb3, 0x2a, 0xad, 0xbc, 0xe4, 0xbd, 0xa0, 0xb3, 0xf7, 0xe3, 0x6c, 0x9d, 0xa7
             ]
         );
     }

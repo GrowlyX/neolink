@@ -10,11 +10,11 @@ mod state;
 mod theme;
 mod ui;
 
-use gpui::{
-    App, Application, Bounds, Context, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowOptions, div, linear_color_stop, linear_gradient, point, prelude::*, px, size,
-};
 use gpui::AsyncApp;
+use gpui::{
+    div, linear_color_stop, linear_gradient, point, prelude::*, px, size, App, Application, Bounds,
+    Context, Window, WindowBackgroundAppearance, WindowBounds, WindowOptions,
+};
 use state::AppState;
 
 struct Neolink {
@@ -41,7 +41,9 @@ impl Neolink {
     /// Drain queued agent notifications. Uses the event stream when it is live, otherwise only
     /// refreshes if a brightness/contrast/flip confirmation needs painting.
     fn drain_notifications(&mut self) -> bool {
-        let Some(rx) = &self.notify_rx else { return false };
+        let Some(rx) = &self.notify_rx else {
+            return false;
+        };
         let mut dirty = false;
         while let Ok(n) = rx.try_recv() {
             if let neolink_core::agent::Notification::Displays { .. } = n {
@@ -77,9 +79,27 @@ impl Render for Neolink {
                     .gap_3()
                     .px_3()
                     .pb_3()
-                    .child(div().w(px(268.0)).flex_none().h_full().child(self.device_list(cx)))
-                    .child(div().flex_1().min_w(px(0.0)).h_full().child(self.canvas(cx)))
-                    .child(div().w(px(300.0)).flex_none().h_full().child(self.inspector(cx))),
+                    .child(
+                        div()
+                            .w(px(268.0))
+                            .flex_none()
+                            .h_full()
+                            .child(self.device_list(cx)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .h_full()
+                            .child(self.canvas(cx)),
+                    )
+                    .child(
+                        div()
+                            .w(px(300.0))
+                            .flex_none()
+                            .h_full()
+                            .child(self.inspector(cx)),
+                    ),
             )
             .child(self.status_bar())
     }
@@ -107,7 +127,11 @@ impl Neolink {
                     })
                     .child(self.state.status.clone()),
             )
-            .child(format!("{} display{}", self.state.items.len(), if self.state.items.len() == 1 { "" } else { "s" }))
+            .child(format!(
+                "{} display{}",
+                self.state.items.len(),
+                if self.state.items.len() == 1 { "" } else { "s" }
+            ))
     }
 
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -143,8 +167,18 @@ impl Neolink {
                     .flex()
                     .flex_col()
                     .gap_0p5()
-                    .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).child("Neolink"))
-                    .child(div().text_xs().text_color(theme::TEXT_FAINT).child("Display manager")),
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Neolink"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::TEXT_FAINT)
+                            .child("Display manager"),
+                    ),
             )
             .child(div().flex_1())
             .child(
@@ -159,26 +193,34 @@ impl Neolink {
                     .border_1()
                     .border_color(theme::HAIRLINE_SOFT)
                     .child(ui::dot(status_color))
-                    .child(div().text_xs().text_color(theme::TEXT_DIM).child(status_text)),
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::TEXT_DIM)
+                            .child(status_text),
+                    ),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(ui::pill("btn-refresh", "Refresh", false).on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.state.refresh();
-                            this.state.status = "Refreshed".into();
-                            cx.notify();
-                        },
-                    )))
                     .child(
-                        ui::pill("btn-login", "At login", self.state.launch_at_login)
-                            .on_click(cx.listener(|this, _, _, cx| {
+                        ui::pill("btn-refresh", "Refresh", false).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.state.refresh();
+                                this.state.status = "Refreshed".into();
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        ui::pill("btn-login", "At login", self.state.launch_at_login).on_click(
+                            cx.listener(|this, _, _, cx| {
                                 this.state.toggle_login_item();
                                 cx.notify();
-                            })),
+                            }),
+                        ),
                     )
                     .child(
                         ui::pill(
@@ -235,7 +277,10 @@ fn ambient_glow() -> impl IntoElement {
         )
 }
 
-fn cfg_clone(state: &AppState, index: usize) -> neolink_core::virtual_display::VirtualDisplayConfig {
+fn cfg_clone(
+    state: &AppState,
+    index: usize,
+) -> neolink_core::virtual_display::VirtualDisplayConfig {
     state
         .items
         .get(index)
@@ -310,24 +355,25 @@ fn main() {
                                 if std::env::var("NEOLINK_DEMO").as_deref() == Ok("2") {
                                     // Exercise every action path so a headless run can be
                                     // verified without Accessibility permission.
-                                    if let Some(m) = this
-                                        .state
-                                        .items
-                                        .get(created)
-                                        .and_then(|i| i.modes.iter().find(|m| m.width == 1920 && m.height == 1080).map(|m| m.id))
-                                    {
+                                    if let Some(m) = this.state.items.get(created).and_then(|i| {
+                                        i.modes
+                                            .iter()
+                                            .find(|m| m.width == 1920 && m.height == 1080)
+                                            .map(|m| m.id)
+                                    }) {
                                         this.state.set_mode(created, m).ok();
                                     }
                                     this.state.set_origin(created, 1600, 40).ok();
                                     this.state.rotate(created, 90).ok();
-                                    this.state.reconfigure_virtual(
-                                        created,
-                                        neolink_core::virtual_display::VirtualDisplayConfig {
-                                            hidpi: false,
-                                            ..cfg_clone(&this.state, created)
-                                        },
-                                    )
-                                    .ok();
+                                    this.state
+                                        .reconfigure_virtual(
+                                            created,
+                                            neolink_core::virtual_display::VirtualDisplayConfig {
+                                                hidpi: false,
+                                                ..cfg_clone(&this.state, created)
+                                            },
+                                        )
+                                        .ok();
                                     this.state.tidy().ok();
                                     this.state.save().ok();
                                     this.state.status = "Demo: all actions ran".into();

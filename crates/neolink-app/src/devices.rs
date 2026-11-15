@@ -4,7 +4,7 @@ use crate::state::{suggested_modes, AppState};
 use crate::theme;
 use crate::ui;
 use gpui::prelude::*;
-use gpui::{Context, div, px};
+use gpui::{div, px, Context};
 use neolink_core::virtual_display::VirtualDisplayConfig;
 
 impl crate::Neolink {
@@ -23,7 +23,12 @@ impl crate::Neolink {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(div().text_xs().text_color(theme::TEXT_FAINT).child("DISPLAYS"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::TEXT_FAINT)
+                            .child("DISPLAYS"),
+                    )
                     .child(ui::chip().child(format!("{}", items.len()))),
             );
 
@@ -42,9 +47,17 @@ impl crate::Neolink {
                     .gap_2()
                     .p_2()
                     .rounded(px(10.0))
-                    .bg(if selected { theme::SHEEN } else { theme::TRANSPARENT })
+                    .bg(if selected {
+                        theme::SHEEN
+                    } else {
+                        theme::TRANSPARENT
+                    })
                     .border_1()
-                    .border_color(if selected { theme::HAIRLINE } else { theme::TRANSPARENT })
+                    .border_color(if selected {
+                        theme::HAIRLINE
+                    } else {
+                        theme::TRANSPARENT
+                    })
                     .cursor_pointer()
                     .hover(|s| s.bg(theme::GLASS_SOFT))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -77,55 +90,67 @@ impl crate::Neolink {
                             ),
                     )
                     .when(item.main, |d| d.child(ui::chip().child("MAIN")))
-                    .child(ui::dot(if enabled { theme::OK } else { theme::TEXT_FAINT })),
+                    .child(ui::dot(if enabled {
+                        theme::OK
+                    } else {
+                        theme::TEXT_FAINT
+                    })),
             );
         }
 
         list = list
-            .child(div().id("device-scroll").flex_1().min_h(px(0.0)).overflow_y_scroll())
+            .child(
+                div()
+                    .id("device-scroll")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll(),
+            )
             .child(ui::divider())
             .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .pt_2()
-                .child(ui::pill("add-display", "+ Add virtual display", true).on_click(cx.listener(
-                    |this, _, _, cx| {
-                        let mut cfg = VirtualDisplayConfig::default();
-                        cfg.modes = suggested_modes();
-                        cfg.hidpi = true;
-                        if let Err(e) = this.state.add_virtual(cfg) {
-                            this.state.status = format!("Could not create display: {e}");
-                        }
-                        cx.notify();
-                    },
-                )))
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .child(ui::pill("save-layout", "Save layout", false).on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.state.status = match this.state.save() {
-                                    Ok(()) => "Layout saved".into(),
-                                    Err(e) => format!("Save failed: {e}"),
-                                };
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .pt_2()
+                    .child(
+                        ui::pill("add-display", "+ Add virtual display", true).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                let mut cfg = VirtualDisplayConfig::default();
+                                cfg.modes = suggested_modes();
+                                cfg.hidpi = true;
+                                if let Err(e) = this.state.add_virtual(cfg) {
+                                    this.state.status = format!("Could not create display: {e}");
+                                }
                                 cx.notify();
-                            },
-                        )))
-                        .child(ui::pill("start-agent", "Start agent", false).on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.state.status = match neolink_core::agent::start() {
-                                    Ok(()) => "DisplayLink agent started".into(),
-                                    Err(e) => format!("{e}"),
-                                };
-                                this.state.refresh();
-                                cx.notify();
-                            },
-                        ))),
-                ),
-        );
+                            }),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(ui::pill("save-layout", "Save layout", false).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.state.status = match this.state.save() {
+                                        Ok(()) => "Layout saved".into(),
+                                        Err(e) => format!("Save failed: {e}"),
+                                    };
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(ui::pill("start-agent", "Start agent", false).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.state.status = match neolink_core::agent::start() {
+                                        Ok(()) => "DisplayLink agent started".into(),
+                                        Err(e) => format!("{e}"),
+                                    };
+                                    this.state.refresh();
+                                    cx.notify();
+                                }),
+                            )),
+                    ),
+            );
 
         list.into_any_element()
     }

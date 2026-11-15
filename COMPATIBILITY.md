@@ -26,7 +26,7 @@ attached while the USB half was written, so the transport is RE-derived and
 | Live validation of the USB transport | No dock in this session. `find_endpoints`, the reset echo and the status checksum are derived from the disassembly, not measured |
 | Frame path | `Transport::frame` ships tile fragments with a caller-supplied pixel source; no capture→encode pipeline is wired, so a physical dock shows nothing yet without the vendor agent |
 | HDCP 2.x | Not implemented; only mentioned in the failure strings we mirror |
-| EDID override | Read/write plumbing exists (`edid`, `edid-write`) and the `.spkg` container is parsed, but the payload→EDID decode is unfinished, so no synthesised template is produced yet |
+| EDID override | Read/write plumbing exists (`edid`, `edid-write`). The `.spkg` container, fragment splice and frame table are implemented (`neolinkctl pack F --out D`), but the frame payload itself still decodes to high-entropy bytes with no EDID magic, so there is no per-dock EDID yet |
 | Refresh-rate selection | Modes carry Hz, but virtual modes are fixed at 60 and there is no picker |
 | Privileged helper | The vendor's `SMAppService` helper is used as-is; we have no helper of our own |
 | Notarisation | Ad-hoc signature only; no Developer ID or `notarytool` run |
@@ -34,8 +34,9 @@ attached while the USB half was written, so the transport is RE-derived and
 
 ## Test coverage
 
-25 unit tests cover the DL3 header/fragment/checksum rules, EDID validation, the
-SPKG container against synthesised and all four real packs, profile mirror
-round-trip and tidy, and the vendor pin/login-item helpers. Manual checks:
+26 unit tests cover the DL3 header/fragment/checksum rules, EDID validation, the
+SPKG container, fragment splice and frame table against synthesised and all four
+real packs, profile mirror round-trip and tidy, and the vendor pin/login-item
+helpers. Manual checks:
 `neolinkctl probe`, `neolinkctl vendor status|fetch|expand|packs`,
 `NEOLINK_DEMO=2`, and launching the signed bundle.
