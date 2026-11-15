@@ -1,6 +1,6 @@
 pub mod agent;
-pub mod diff;
 pub mod dfu;
+pub mod diff;
 pub mod displays;
 pub mod dl3;
 pub mod hdcp;

@@ -455,8 +455,9 @@ impl AppState {
             item.virtual_cfg.clone(),
             item.modes.iter().find(|m| m.id == mode_id).cloned(),
         ) {
+            // Keep the rate the user picked; only the size changes.
             let mut next = cfg.clone();
-            next.modes = vec![VirtualMode::new(m.width, m.height)];
+            next.modes = vec![VirtualMode::with_refresh(m.width, m.height, m.refresh)];
             return self.reconfigure_virtual(index, next);
         }
 
@@ -464,6 +465,80 @@ impl AppState {
             let changes = vec![displays::Change {
                 id: d.id,
                 mode_id: Some(mode_id),
+                ..Default::default()
+            }];
+            displays::apply(&changes, true)?;
+        }
+        self.reassert_virtual(index)?;
+        self.refresh();
+        Ok(())
+    }
+
+    /// Refresh rates this display actually advertises for the size it is showing.
+    ///
+    /// The list comes from the display's own modes, never from a fixed set, so a rate is only
+    /// offered when the hardware (or the virtual mode list) really has it.
+    pub fn rates(&self, index: usize) -> Vec<u32> {
+        let Some(item) = self.items.get(index) else {
+            return Vec::new();
+        };
+        let mut out: Vec<u32> = item
+            .modes
+            .iter()
+            .filter(|m| m.width == item.width && m.height == item.height && m.refresh > 0.0)
+            .map(Mode::hz)
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// The rate currently in effect, in Hz.
+    pub fn refresh_hz(&self, index: usize) -> Option<u32> {
+        self.items
+            .get(index)
+            .and_then(|i| i.cg.as_ref())
+            .and_then(|d| d.mode)
+            .map(|m| m.refresh.round() as u32)
+    }
+
+    /// Pick a different refresh rate at the current size.
+    ///
+    /// Both paths only use a mode the display already lists: CoreGraphics needs the mode id, and
+    /// a virtual display has to be re-published with timings it already advertised.
+    pub fn set_refresh(&mut self, index: usize, hz: u32) -> Result<()> {
+        let Some(item) = self.items.get(index).cloned() else {
+            return Ok(());
+        };
+        let Some(mode) = item
+            .modes
+            .iter()
+            .find(|m| m.width == item.width && m.height == item.height && m.hz() == hz)
+            .cloned()
+        else {
+            return Err(anyhow!(
+                "{} does not offer {} Hz at {}×{}",
+                item.name,
+                hz,
+                item.width,
+                item.height
+            ));
+        };
+
+        if let Some(cfg) = item.virtual_cfg.clone() {
+            let mut next = cfg;
+            next.modes = vec![VirtualMode::with_refresh(
+                mode.width,
+                mode.height,
+                mode.refresh,
+            )];
+            return self.reconfigure_virtual(index, next);
+        }
+
+        if let Some(d) = &item.cg {
+            let changes = vec![displays::Change {
+                id: d.id,
+                mode_id: Some(mode.id),
                 ..Default::default()
             }];
             displays::apply(&changes, true)?;
@@ -553,6 +628,7 @@ impl AppState {
             height: i.height,
             hidpi: i.hidpi,
             rotation: i.rotation,
+            refresh: i.cg.as_ref().and_then(|d| d.mode.map(|m| m.refresh)),
             mirror_of,
             main: i.main,
         }
@@ -625,16 +701,24 @@ impl Default for AppState {
 }
 
 /// The mode list a virtual display should advertise, derived from common panel sizes.
+///
+/// A synthetic display is free to publish more than one refresh per size, so it advertises the
+/// rates the inspector may then pick from. Real displays use their own list instead.
 pub fn suggested_modes() -> Vec<VirtualMode> {
-    vec![
-        VirtualMode::new(3840, 2160),
-        VirtualMode::new(2560, 1440),
-        VirtualMode::new(1920, 1200),
-        VirtualMode::new(1920, 1080),
-        VirtualMode::new(1680, 1050),
-        VirtualMode::new(1600, 900),
-        VirtualMode::new(1440, 900),
-        VirtualMode::new(1280, 1024),
-        VirtualMode::new(1280, 720),
-    ]
+    const RATES: [f64; 3] = [60.0, 75.0, 120.0];
+    let sizes = [
+        (3840, 2160),
+        (2560, 1440),
+        (1920, 1200),
+        (1920, 1080),
+        (1680, 1050),
+        (1600, 900),
+        (1440, 900),
+        (1280, 1024),
+        (1280, 720),
+    ];
+    sizes
+        .iter()
+        .flat_map(|&(w, h)| RATES.map(move |hz| VirtualMode::with_refresh(w, h, hz)))
+        .collect()
 }

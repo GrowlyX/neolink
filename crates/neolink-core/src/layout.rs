@@ -31,6 +31,10 @@ pub struct Entry {
     pub height: u32,
     pub hidpi: bool,
     pub rotation: u32,
+    /// Preferred vertical refresh in Hz. `None` keeps whatever CoreGraphics chose.
+    /// Older profiles have no field, so it deserialises as `None`.
+    #[serde(default)]
+    pub refresh: Option<f64>,
     pub mirror_of: Option<String>,
     pub main: bool,
 }
@@ -66,6 +70,7 @@ pub fn capture() -> Profile {
                 height: d.height,
                 hidpi: d.mode.map(|m| m.hidpi()).unwrap_or(false),
                 rotation: d.rotation.round() as u32,
+                refresh: d.mode.map(|m| m.refresh),
                 mirror_of: d
                     .mirror_of
                     .and_then(|id| displays::list().into_iter().find(|o| o.id == id))
@@ -108,10 +113,19 @@ pub fn apply(profile: &Profile) -> Result<()> {
             .as_ref()
             .and_then(|m| live.iter().find(|d| &d.uuid == m))
             .map(|m| m.id);
+        // A saved rate only means something if this display still advertises it at the
+        // saved size; otherwise leave the mode alone rather than inventing a timing.
+        let mode_id = e.mode_id.or_else(|| {
+            let want = e.refresh?;
+            displays::modes(d.id)
+                .into_iter()
+                .find(|m| m.width == e.width && m.height == e.height && m.refresh == want)
+                .map(|m| m.id)
+        });
         changes.push(displays::Change {
             id: d.id,
             origin: Some((e.x, e.y)),
-            mode_id: e.mode_id,
+            mode_id,
             mirror_of: mirror.map(Some),
         });
     }
@@ -160,6 +174,7 @@ mod tests {
             height: 1080,
             hidpi: false,
             rotation: 0,
+            refresh: None,
             mirror_of: mirror.map(str::to_owned),
             main: false,
         }
@@ -175,6 +190,63 @@ mod tests {
         assert!(text.contains("\"mirror_of\":\"A\""));
         let back: Profile = serde_json::from_str(&text).unwrap();
         assert_eq!(back, profile);
+    }
+
+    #[test]
+    fn refresh_roundtrips_and_old_profiles_still_load() {
+        let mut a = entry("A", 0, None);
+        a.refresh = Some(75.0);
+        let profile = Profile {
+            version: 1,
+            displays: vec![a],
+        };
+        let text = serde_json::to_string(&profile).unwrap();
+        assert!(text.contains("\"refresh\":75"));
+        let back: Profile = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, profile);
+
+        // A profile written before the field existed must still deserialise.
+        let old: Profile = serde_json::from_str(
+            r#"{"version":1,"displays":[{"uuid":"A","name":"A","x":0,"y":0,
+                "mode_id":3,"width":1920,"height":1080,"hidpi":false,
+                "rotation":0,"mirror_of":null,"main":true}]}"#,
+        )
+        .unwrap();
+        assert_eq!(old.displays[0].refresh, None);
+    }
+
+    #[test]
+    fn refresh_is_only_restored_when_the_size_matches() {
+        // The live list is whatever the machine has, so drive the matcher directly over a
+        // synthetic mode set.
+        let modes = vec![
+            displays::Mode {
+                id: 1,
+                width: 1920,
+                height: 1080,
+                pixel_width: 1920,
+                pixel_height: 1080,
+                refresh: 60.0,
+            },
+            displays::Mode {
+                id: 2,
+                width: 1280,
+                height: 720,
+                pixel_width: 1280,
+                pixel_height: 720,
+                refresh: 75.0,
+            },
+        ];
+        let pick = |w: u32, h: u32, hz: f64| {
+            modes
+                .iter()
+                .find(|m| m.width == w && m.height == h && m.refresh == hz)
+                .map(|m| m.id)
+        };
+        assert_eq!(pick(1920, 1080, 60.0), Some(1));
+        // 75 Hz exists, but not at 1920x1080.
+        assert_eq!(pick(1920, 1080, 75.0), None);
+        assert_eq!(pick(1280, 720, 75.0), Some(2));
     }
 
     #[test]

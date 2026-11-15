@@ -501,6 +501,7 @@ fn main() {
                                         this.state.set_mode(created, m).ok();
                                     }
                                     this.state.set_origin(created, 1600, 40).ok();
+                                    this.state.set_refresh(created, 75).ok();
                                     this.state.rotate(created, 90).ok();
                                     this.state
                                         .reconfigure_virtual(

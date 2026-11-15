@@ -30,8 +30,19 @@ impl VirtualMode {
             refresh: 60.0,
         }
     }
+    pub fn with_refresh(width: u32, height: u32, refresh: f64) -> Self {
+        Self {
+            width,
+            height,
+            refresh,
+        }
+    }
     pub fn label(&self) -> String {
         format!("{} × {} @ {:.0} Hz", self.width, self.height, self.refresh)
+    }
+    /// Rounded rate, for comparing modes that differ only in timing.
+    pub fn hz(&self) -> u32 {
+        self.refresh.round().max(0.0) as u32
     }
 }
 

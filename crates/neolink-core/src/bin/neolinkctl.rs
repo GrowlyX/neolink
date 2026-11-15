@@ -6,7 +6,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use neolink_core::{
-    agent, diff::DirtyTracker, displays, dl3, dfu, layout, loginitem, spkg, transport, vendor,
+    agent, dfu, diff::DirtyTracker, displays, dl3, layout, loginitem, spkg, transport, vendor,
     virtual_display,
 };
 use std::time::Duration;
@@ -218,10 +218,7 @@ fn main() -> Result<()> {
             let fw = dfu::Firmware::parse(&std::fs::read(&path)?)?;
             let dev = dfu::Device::open_matching(|_| true)?;
             let desc = dev.descriptor()?;
-            println!(
-                "dock        {}",
-                dev.desc.bus_id
-            );
+            println!("dock        {}", dev.desc.bus_id);
             println!(
                 "firmware    customer/board {:#08x} id {:#018x}",
                 desc.customer_board(),
@@ -231,7 +228,10 @@ fn main() -> Result<()> {
             let functional = dev.functional();
             match &functional {
                 Some(f) => println!("block size  {} (from descriptor)", f.block),
-                None => println!("block size  {} (default, none readable)", dfu::DEFAULT_BLOCK),
+                None => println!(
+                    "block size  {} (default, none readable)",
+                    dfu::DEFAULT_BLOCK
+                ),
             }
             if !force {
                 let mut t = transport::Transport::open_matching(|d| d.bus_id == dev.desc.bus_id)?;
@@ -252,9 +252,7 @@ fn main() -> Result<()> {
                     }
                 }
             };
-            let mut session = dev
-                .session(functional.as_ref())
-                .with_progress(&mut cb);
+            let mut session = dev.session(functional.as_ref()).with_progress(&mut cb);
             let sent = session.flash(&fw)?;
             println!("Firmware sent ({sent} bytes)");
             println!("The dock re-enumerates; power-cycle it if it does not come back.");

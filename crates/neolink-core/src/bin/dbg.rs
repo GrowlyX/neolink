@@ -57,6 +57,7 @@ fn main() {
             height: d.height,
             hidpi: false,
             rotation: 0,
+            refresh: d.mode.map(|m| m.refresh),
             mirror_of: None,
             main: d.main,
         })

@@ -75,8 +75,8 @@ const STATE_MANIFEST: u8 = 5;
 /// keeps at `+0x40`). Decoded that reads `FirmwareModif\x1cer` — the vendor's
 /// own string, with a stray `0x1c`, and it is repeated over the file.
 const MASK: [u8; 17] = [
-    0x46, 0x69, 0x72, 0x6d, 0x77, 0x61, 0x72, 0x65, b'M', b'o', b'd', b'i', b'f', 0x1c, b'e',
-    b'r', 0x00,
+    0x46, 0x69, 0x72, 0x6d, 0x77, 0x61, 0x72, 0x65, b'M', b'o', b'd', b'i', b'f', 0x1c, b'e', b'r',
+    0x00,
 ];
 
 /// Substitute the vendor uses for a zero key byte.
@@ -193,7 +193,11 @@ impl Functional {
             .unwrap_or(0)
             .clamp(MIN_BLOCK, MAX_BLOCK);
         Self {
-            block: if bytes.len() <= 5 { DEFAULT_BLOCK } else { block },
+            block: if bytes.len() <= 5 {
+                DEFAULT_BLOCK
+            } else {
+                block
+            },
         }
     }
 }
@@ -336,9 +340,7 @@ pub struct Device {
 
 impl Device {
     /// Claim the DFU interface of a matching dock.
-    pub fn open_matching(
-        pick: impl Fn(&crate::transport::DeviceDesc) -> bool,
-    ) -> Result<Self> {
+    pub fn open_matching(pick: impl Fn(&crate::transport::DeviceDesc) -> bool) -> Result<Self> {
         let info = nusb::list_devices()
             .wait()
             .context("listing USB devices")?
@@ -432,7 +434,10 @@ pub fn plan(total: usize, block: usize) -> impl Iterator<Item = (u16, usize, usi
 #[derive(Debug)]
 pub enum FlashError {
     /// The dock rejected a block at the smallest size we are willing to try.
-    Stall { block: usize, offset: usize },
+    Stall {
+        block: usize,
+        offset: usize,
+    },
     Other(anyhow::Error),
 }
 
@@ -445,10 +450,9 @@ impl From<anyhow::Error> for FlashError {
 impl std::fmt::Display for FlashError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FlashError::Stall { block, offset } => write!(
-                f,
-                "dock stalled at block size {block} (offset {offset})"
-            ),
+            FlashError::Stall { block, offset } => {
+                write!(f, "dock stalled at block size {block} (offset {offset})")
+            }
             FlashError::Other(e) => write!(f, "{e}"),
         }
     }
@@ -554,10 +558,11 @@ impl<'a> Session<'a> {
         let mut sent = 0usize;
         for (index, at, len) in plan(fw.len(), self.block) {
             let chunk = &fw.body[at..at + len];
-            self.class_out(1, index, chunk).map_err(|_| FlashError::Stall {
-                block: self.block,
-                offset: at,
-            })?;
+            self.class_out(1, index, chunk)
+                .map_err(|_| FlashError::Stall {
+                    block: self.block,
+                    offset: at,
+                })?;
             self.poll()?;
             sent += len;
             if let Some(cb) = self.progress.as_mut() {
@@ -592,16 +597,28 @@ mod tests {
 
     #[test]
     fn descriptor_rejects_short_long_and_corrupt() {
-        assert!(Descriptor::parse(&[0x10; 15]).unwrap_err().to_string().contains("Missing"));
+        assert!(Descriptor::parse(&[0x10; 15])
+            .unwrap_err()
+            .to_string()
+            .contains("Missing"));
         let mut d = descriptor();
         d.push(b'Z');
-        assert!(Descriptor::parse(&d).unwrap_err().to_string().contains("too long"));
+        assert!(Descriptor::parse(&d)
+            .unwrap_err()
+            .to_string()
+            .contains("too long"));
         let mut d = descriptor();
         d[1] = 0x41;
-        assert_eq!(Descriptor::parse(&d).unwrap_err().to_string(), "Descriptor corrupt");
+        assert_eq!(
+            Descriptor::parse(&d).unwrap_err().to_string(),
+            "Descriptor corrupt"
+        );
         let mut d = descriptor();
         d[9] = 0x01;
-        assert_eq!(Descriptor::parse(&d).unwrap_err().to_string(), "Descriptor corrupt");
+        assert_eq!(
+            Descriptor::parse(&d).unwrap_err().to_string(),
+            "Descriptor corrupt"
+        );
     }
 
     #[test]
@@ -685,7 +702,11 @@ mod tests {
 
     #[test]
     fn firmware_sends_the_whole_container_with_the_candidate_cleared() {
-        let bytes = pack(&[(u16::from_le_bytes(*b"RD"), b"r"), (Firmware::BODY, &[1]), (Firmware::END, b"")]);
+        let bytes = pack(&[
+            (u16::from_le_bytes(*b"RD"), b"r"),
+            (Firmware::BODY, &[1]),
+            (Firmware::END, b""),
+        ]);
         let fw = Firmware::parse(&bytes).unwrap();
         // Everything is shipped; only the one candidate byte changed.
         assert_eq!(fw.body.len(), bytes.len());
@@ -721,10 +742,15 @@ mod tests {
     #[test]
     fn firmware_rejects_bad_magic_and_short_file() {
         assert_eq!(
-            Firmware::parse(b"not firmware at all!!!!!").unwrap_err().to_string(),
+            Firmware::parse(b"not firmware at all!!!!!")
+                .unwrap_err()
+                .to_string(),
             "Bad magic value"
         );
-        assert!(Firmware::parse(b"ELLA").unwrap_err().to_string().contains("too small"));
+        assert!(Firmware::parse(b"ELLA")
+            .unwrap_err()
+            .to_string()
+            .contains("too small"));
     }
 
     #[test]

@@ -44,6 +44,8 @@ impl crate::Neolink {
         let swatch = theme::swatch(index);
         let current_mode = item.cg.as_ref().and_then(|d| d.mode).map(|m| m.id);
         let modes = item.modes.clone();
+        let rates = self.state.rates(index);
+        let current_hz = self.state.refresh_hz(index);
         let is_virtual = item.is_virtual();
         let cfg = item.virtual_cfg.clone();
 
@@ -91,6 +93,13 @@ impl crate::Neolink {
             .child(ui::stat("Position", format!("{}, {}", item.x, item.y)))
             .child(ui::stat("Rotation", format!("{}°", item.rotation)))
             .child(ui::stat(
+                "Refresh",
+                match current_hz {
+                    Some(hz) => format!("{hz} Hz"),
+                    None => "-".to_string(),
+                },
+            ))
+            .child(ui::stat(
                 "Backing",
                 if item.hidpi {
                     "2× HiDPI".to_string()
@@ -98,6 +107,37 @@ impl crate::Neolink {
                     "1×".to_string()
                 },
             ));
+
+        // Refresh picker. Only shown when the display really advertises more than one rate at
+        // the size it is currently using, so we never invent a timing.
+        if rates.len() > 1 {
+            panel = panel.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text_dim())
+                            .child("Refresh"),
+                    )
+                    .child(div().flex().gap_1().children(rates.into_iter().map(|hz| {
+                        ui::pill(
+                            gpui::ElementId::Name(format!("hz-{}-{hz}", item.uuid).into()),
+                            format!("{hz} Hz"),
+                            current_hz == Some(hz),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.state.status = match this.state.set_refresh(index, hz) {
+                                Ok(()) => format!("Refresh set to {hz} Hz"),
+                                Err(e) => format!("Refresh change failed: {e}"),
+                            };
+                            cx.notify();
+                        }))
+                    }))),
+            );
+        }
 
         if let Some(v) = &item.vendor {
             panel = panel

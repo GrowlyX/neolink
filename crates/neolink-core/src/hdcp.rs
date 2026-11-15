@@ -229,7 +229,10 @@ impl State {
 
     /// True once content may be sent.
     pub fn authorised(self) -> bool {
-        matches!(self, State::AuthorisedConnected | State::AuthorisedDisconnected)
+        matches!(
+            self,
+            State::AuthorisedConnected | State::AuthorisedDisconnected
+        )
     }
 }
 
@@ -289,7 +292,10 @@ impl SendCert {
     /// ("invalid raw ksv bytes!").
     pub fn parse(body: &[u8]) -> Result<Self> {
         if body.first() != Some(&HdcpMessage::AkeNoStoredKm.id()) {
-            bail!("not an AKE_SEND_CERT message (id {})", body.first().copied().unwrap_or(0xff));
+            bail!(
+                "not an AKE_SEND_CERT message (id {})",
+                body.first().copied().unwrap_or(0xff)
+            );
         }
         if body.len() < Self::MIN_LEN {
             bail!(
@@ -359,8 +365,8 @@ pub fn h_prime(km: &[u8], rtx: &[u8], rrx: &[u8]) -> [u8; 32] {
     hash.update(rtx);
     hash.update(rrx);
     let digest = hash.finalize();
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(km)
-        .expect("HMAC accepts keys of any length");
+    let mut mac =
+        <Hmac<Sha256> as Mac>::new_from_slice(km).expect("HMAC accepts keys of any length");
     mac.update(&digest);
     mac.finalize().into_bytes().into()
 }
@@ -368,8 +374,8 @@ pub fn h_prime(km: &[u8], rtx: &[u8], rrx: &[u8]) -> [u8; 32] {
 /// `L' = HMAC-SHA256(Km, rn || rrx)`.
 pub fn l_prime(km: &[u8], rn: &[u8], rrx: &[u8]) -> [u8; 32] {
     use hmac::{Hmac, Mac};
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(km)
-        .expect("HMAC accepts keys of any length");
+    let mut mac =
+        <Hmac<Sha256> as Mac>::new_from_slice(km).expect("HMAC accepts keys of any length");
     mac.update(rn);
     mac.update(rrx);
     mac.finalize().into_bytes().into()
@@ -493,7 +499,11 @@ impl<'a> Link<'a> {
     pub fn ake_send_cert(&mut self, rtx: &[u8; 8], caps: &Caps) -> Result<SendCert> {
         let reply = self.receive(HdcpMessage::AkeSendCert.id())?;
         if reply.id != HdcpMessage::AkeSendCert.id() {
-            bail!("expected {}, got {}", HdcpMessage::name(HdcpMessage::AkeSendCert.id()), reply.name());
+            bail!(
+                "expected {}, got {}",
+                HdcpMessage::name(HdcpMessage::AkeSendCert.id()),
+                reply.name()
+            );
         }
         let mut body = Vec::with_capacity(reply.body.len() + 1);
         body.push(reply.id);
@@ -547,7 +557,10 @@ mod tests {
         assert_eq!(HdcpMessage::AkeNoStoredKm.id(), 3);
         assert_eq!(HdcpMessage::LcSendLPrime.id(), 9);
         assert_eq!(Message::encrypted(HdcpMessage::AkeSendCert, 0, []).id, 0x12);
-        assert_eq!(Message::encrypted(HdcpMessage::LcSendLPrime, 0, []).id, 0x19);
+        assert_eq!(
+            Message::encrypted(HdcpMessage::LcSendLPrime, 0, []).id,
+            0x19
+        );
         assert!(Message::encrypted(HdcpMessage::AkeSendCert, 0, []).is_encrypted());
         assert!(!Message::new(HdcpMessage::AkeSendCert, 0, []).is_encrypted());
     }
@@ -639,7 +652,10 @@ mod tests {
         let private = key();
         let mut body = cert_body(private, [0x01, 0x02]);
         body[0] = 4;
-        assert!(SendCert::parse(&body).unwrap_err().to_string().contains("AKE_SEND_CERT"));
+        assert!(SendCert::parse(&body)
+            .unwrap_err()
+            .to_string()
+            .contains("AKE_SEND_CERT"));
         let body = cert_body(private, [0x01, 0x02]);
         assert!(SendCert::parse(&body[..body.len() - 1])
             .unwrap_err()
@@ -669,14 +685,17 @@ mod tests {
         let private = key();
         let cert = SendCert::parse(&cert_body(private, [0x01, 0x02])).unwrap();
         let err = verify(&cert, &rtx(), &Caps::default().encode()).unwrap_err();
-        assert!(err.to_string().contains("AKE failed signature verification"));
+        assert!(err
+            .to_string()
+            .contains("AKE failed signature verification"));
     }
 
     #[test]
     fn signature_verification_rejects_tampering() {
         let private = key();
         let cert = SendCert::parse(&cert_body(private, [0x01, 0x02])).unwrap();
-        let verifying = rsa::pkcs1v15::VerifyingKey::<Sha256>::new(rsa::RsaPublicKey::from(private));
+        let verifying =
+            rsa::pkcs1v15::VerifyingKey::<Sha256>::new(rsa::RsaPublicKey::from(private));
         let sig = rsa::pkcs1v15::Signature::try_from(cert.signature.as_slice()).unwrap();
         use rsa::signature::Verifier;
         let other = cert.signed(&[0u8; 8], &Caps::default().encode());

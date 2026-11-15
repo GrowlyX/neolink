@@ -130,6 +130,10 @@ impl Mode {
     pub fn hidpi(&self) -> bool {
         self.pixel_width > self.width
     }
+    /// Rounded vertical refresh, for comparing modes that differ only in timing.
+    pub fn hz(&self) -> u32 {
+        self.refresh.round().max(0.0) as u32
+    }
     pub fn label(&self) -> String {
         let hz = if self.refresh > 0.0 {
             format!(" @ {:.0} Hz", self.refresh)
