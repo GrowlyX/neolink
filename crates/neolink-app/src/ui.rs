@@ -1,12 +1,14 @@
-//! Small building blocks that give the app its liquid-glass look.
+//! Neolink components for GPUI: button, badge, card, segmented control, toggle.
 //!
-//! Everything is composed from GPUI primitives: a translucent fill, a 1px top sheen, a hairline
-//! border and a soft shadow. Because the window itself is created with
-//! `WindowBackgroundAppearance::Blurred`, the translucent layers pick up real desktop blur.
+//! Each is a function that returns an element. Sizes, colors and type come from the brand
+//! tokens (`neolink_brand::theme`, the Astryx "neolink" theme), and match the web kit's
+//! components: pill buttons with bold uppercase labels, hairline cards, gray pills for
+//! badges. Black and white only; no gradients, glows or shadows.
 
 use crate::theme;
+use crate::theme::{c, colors, radius, size, styled, text};
 use gpui::prelude::*;
-use gpui::{div, px, rgb, App, Div, Hsla, IntoElement, SharedString, Window};
+use gpui::{div, px, svg, Div, FontWeight, Hsla, IntoElement, SharedString, Stateful};
 
 /// Resolve common monitor names to the official bundled brand marks.
 pub(crate) fn brand_logo(name: &str) -> Option<&'static str> {
@@ -73,162 +75,219 @@ pub(crate) fn brand_logo(name: &str) -> Option<&'static str> {
     })
 }
 
-/// A frosted panel with an optional highlight border.
-pub fn glass(radius: f32) -> Div {
-    div()
-        .bg(theme::glass())
-        .border_1()
-        .border_color(theme::hairline())
-        .rounded(px(radius))
-        .shadow_lg()
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ButtonKind {
+    /// The one action that matters: black on light, white on dark.
+    Primary,
+    Secondary,
+    Ghost,
 }
 
-/// Inset chip, used for badges and small stats.
-pub fn chip() -> Div {
+/// A pill button with a bold uppercase label. Attach `.on_click(...)` yourself when `enabled`.
+pub fn button(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    kind: ButtonKind,
+    enabled: bool,
+) -> Stateful<Div> {
+    let k = colors();
+    let (bg, fg) = match kind {
+        ButtonKind::Primary => (k.accent, k.on_accent),
+        ButtonKind::Secondary => (k.neutral, k.text_primary),
+        ButtonKind::Ghost => (0x0000_0000, k.text_primary),
+    };
+    let pressed = k.overlay_pressed;
+    let base = div()
+        .id(id.into())
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .gap(px(6.0))
+        .h(px(size::MD))
+        .px(px(14.0))
+        .rounded(px(radius::FULL))
+        .bg(c(bg))
+        .text_color(c(fg))
+        .child(styled(&text::BUTTON, label));
+    if enabled {
+        base.cursor_pointer()
+            .hover(move |s| {
+                if kind == ButtonKind::Primary {
+                    s.opacity(0.82)
+                } else {
+                    s.bg(c(pressed))
+                }
+            })
+            .active(|s| s.opacity(0.7))
+    } else {
+        base.opacity(0.35)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BadgeKind {
+    Neutral,
+    /// Black on light, white on dark.
+    Strong,
+}
+
+pub fn badge(label: impl Into<SharedString>, kind: BadgeKind) -> Div {
+    let k = colors();
+    let (bg, fg) = match kind {
+        BadgeKind::Neutral => (k.background_gray, k.text_gray),
+        BadgeKind::Strong => (k.info, k.on_info),
+    };
     div()
-        .px_2()
-        .py_0p5()
-        .rounded_full()
-        .bg(theme::glass_soft())
+        .flex()
+        .flex_none()
+        .items_center()
+        .h(px(20.0))
+        .px(px(8.0))
+        .rounded(px(radius::FULL))
+        .bg(c(bg))
+        .text_color(c(fg))
+        .font_family(text::SUPPORTING.family)
+        .text_size(px(12.0))
+        .font_weight(FontWeight::MEDIUM)
+        .whitespace_nowrap()
+        .child(label.into())
+}
+
+/// A hairline-bordered surface with the container radius.
+pub fn card() -> Div {
+    let k = colors();
+    div()
+        .bg(c(k.background_card))
         .border_1()
-        .border_color(theme::hairline_soft())
-        .text_xs()
-        .text_color(theme::text_dim())
+        .border_color(c(k.border))
+        .rounded(px(radius::CONTAINER))
+}
+
+/// The track of a segmented control. Fill it with [`segment`]s.
+pub fn segmented() -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(2.0))
+        .h(px(size::SM))
+        .p(px(4.0))
+        .rounded(px(radius::ELEMENT))
+        .bg(c(colors().neutral))
+}
+
+/// One option in a segmented control. Attach `.on_click(...)` yourself.
+pub fn segment(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    selected: bool,
+) -> Stateful<Div> {
+    let k = colors();
+    let item = div()
+        .id(id.into())
+        .flex()
+        .items_center()
+        .h(px(20.0))
+        .px(px(9.0))
+        .rounded(px(12.0))
+        .font_family(text::SUPPORTING.family)
+        .text_size(px(12.0))
+        .whitespace_nowrap()
+        .cursor_pointer()
+        .child(label.into());
+    if selected {
+        item.bg(c(k.background_surface))
+            .text_color(c(k.text_primary))
+            .font_weight(FontWeight::SEMIBOLD)
+    } else {
+        let hover = k.text_primary;
+        item.text_color(c(k.text_secondary))
+            .font_weight(FontWeight::MEDIUM)
+            .hover(move |s| s.text_color(c(hover)))
+    }
+}
+
+/// A switch: ink track when on, gray when off.
+pub fn toggle(id: impl Into<gpui::ElementId>, on: bool) -> Stateful<Div> {
+    let k = colors();
+    div()
+        .id(id.into())
+        .w(px(36.0))
+        .h(px(21.0))
+        .flex_none()
+        .rounded(px(radius::FULL))
+        .p(px(2.0))
+        .flex()
+        .cursor_pointer()
+        .when(on, |el| el.justify_end().bg(c(k.accent)))
+        .when(!on, |el| el.bg(c(k.border_emphasized)))
+        .child(
+            div()
+                .size(px(17.0))
+                .rounded(px(radius::FULL))
+                .bg(c(k.on_accent)),
+        )
+}
+
+// -- compatibility names used across the views -----------------------------------------------
+
+pub fn glass(_radius: f32) -> Div {
+    card()
+}
+
+pub fn chip() -> Div {
+    badge("", BadgeKind::Neutral)
+}
+
+/// A compact selectable chip for small option sets.
+pub fn pill(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    active: bool,
+) -> Stateful<Div> {
+    segment(id, label, active)
 }
 
 pub fn label(text: impl Into<SharedString>) -> impl IntoElement {
-    div()
-        .text_xs()
-        .text_color(theme::text_faint())
-        .child(text.into())
+    styled(&crate::theme::text::BODY, text).text_color(theme::text_dim())
 }
 
-pub fn value(text: impl Into<SharedString>) -> impl IntoElement {
-    div().text_sm().text_color(theme::text()).child(text.into())
-}
-
-/// Rounded pill button. `active` switches it to the accent treatment.
-pub fn pill(
-    id: impl Into<gpui::ElementId>,
-    text: impl Into<SharedString>,
-    active: bool,
-) -> gpui::Stateful<Div> {
-    let bg = if active {
-        theme::with_alpha(theme::ACCENT, 0.18)
-    } else {
-        theme::glass_soft()
-    };
-    let fg = if active {
-        theme::ACCENT
-    } else {
-        theme::text_dim()
-    };
-    let border = if active {
-        theme::with_alpha(theme::ACCENT, 0.45)
-    } else {
-        theme::hairline_soft()
-    };
-    div()
-        .id(id.into())
-        .px_3()
-        .py_1p5()
-        .rounded_full()
-        .bg(bg)
-        .border_1()
-        .border_color(border)
-        .text_xs()
-        .text_color(fg)
-        .cursor_pointer()
-        .hover(|s| s.bg(theme::sheen()).text_color(theme::text()))
-        .active(|s| s.opacity(0.8))
-        .child(text.into())
-}
-
-/// A coloured status dot.
+/// A small status dot.
 pub fn dot(color: impl Into<Hsla>) -> impl IntoElement {
-    div().size_1p5().rounded_full().bg(color.into())
+    div()
+        .size(px(6.0))
+        .flex_none()
+        .rounded_full()
+        .bg(color.into())
 }
 
-/// Top sheen: a 1px white gradient that sells the glass edge.
+/// Kept for call sites; the flat design has no sheen.
 pub fn sheen() -> impl IntoElement {
-    div().h(px(1.0)).w_full().bg(theme::sheen())
+    div()
 }
 
 pub fn divider() -> impl IntoElement {
-    div().h(px(1.0)).w_full().bg(theme::hairline_soft())
+    div().flex_none().h(px(1.0)).w_full().bg(theme::hairline())
 }
 
-/// App glyph: two overlapping rounded rectangles suggesting a mirrored desktop.
+/// The Neolink mark.
 pub fn logo(size: f32) -> impl IntoElement {
-    div()
-        .relative()
-        .w(px(size))
-        .h(px(size))
-        .child(
-            div()
-                .absolute()
-                .left(px(0.0))
-                .top(px(size * 0.18))
-                .w(px(size * 0.62))
-                .h(px(size * 0.62))
-                .rounded(px(size * 0.16))
-                .border_1()
-                .border_color(theme::with_alpha(theme::ACCENT, 0.7)),
-        )
-        .child(
-            div()
-                .absolute()
-                .left(px(size * 0.34))
-                .top(px(0.0))
-                .w(px(size * 0.62))
-                .h(px(size * 0.62))
-                .rounded(px(size * 0.16))
-                .bg(theme::with_alpha(theme::ACCENT, 0.16))
-                .border_1()
-                .border_color(theme::ACCENT),
-        )
+    svg()
+        .path("logo/neolink-mark.svg")
+        .size(px(size))
+        .flex_none()
+        .text_color(theme::text())
 }
 
-/// A tiny toggle that reads as a physical switch.
-pub fn toggle(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<Div> {
-    let (track, knob_left, knob_bg) = if on {
-        (
-            theme::with_alpha(theme::ACCENT, 0.35),
-            px(17.0),
-            theme::ACCENT,
-        )
-    } else {
-        (theme::sheen(), px(2.0), theme::text_dim())
-    };
-    div()
-        .id(id.into())
-        .relative()
-        .w(px(34.0))
-        .h(px(20.0))
-        .rounded_full()
-        .bg(track)
-        .border_1()
-        .border_color(theme::hairline())
-        .cursor_pointer()
-        .child(
-            div()
-                .absolute()
-                .left(knob_left)
-                .top(px(2.0))
-                .size(px(15.0))
-                .rounded_full()
-                .bg(knob_bg),
-        )
-}
-
-/// Slider track + filled portion, with the value shown as a percentage.
+/// Slider track + filled portion.
 pub fn meter(ratio: f32, color: impl Into<Hsla>) -> impl IntoElement {
     let r = ratio.clamp(0.0, 1.0);
     div()
         .h(px(4.0))
         .w_full()
         .rounded_full()
-        .bg(theme::sheen())
+        .bg(c(colors().track))
         .child(
             div()
                 .h(px(4.0))
@@ -272,7 +331,11 @@ pub fn slider(
                 .flex_1()
                 .h(px(4.0))
                 .rounded_full()
-                .bg(if i < lit { fill } else { theme::sheen().into() })
+                .bg(if i < lit {
+                    fill
+                } else {
+                    c(colors().track).into()
+                })
                 .cursor_pointer()
                 .hover(|s| s.h(px(7.0)))
                 .on_click(move |_, window, cx| {
@@ -298,37 +361,12 @@ fn id_hint<T: Into<gpui::ElementId>>(id: T) -> String {
     }
 }
 
-/// Draws a small arrow/chevron using two rotated borders.
-#[allow(dead_code)]
-pub fn chevron(_up: bool) -> impl IntoElement {
-    div()
-        .size(px(6.0))
-        .border_t_1()
-        .border_r_1()
-        .border_color(theme::text_faint())
-}
-
-/// Convenience: a labelled stat row used in the inspector.
+/// A labelled fact row: label on the left, value on the right.
 pub fn stat(name: &'static str, text: impl Into<SharedString>) -> impl IntoElement {
     div()
         .flex()
         .items_center()
         .justify_between()
-        .py_1()
         .child(label(name))
-        .child(value(text))
-}
-
-#[allow(dead_code)]
-pub fn accent_text(text: impl Into<SharedString>) -> impl IntoElement {
-    div().text_sm().text_color(theme::ACCENT).child(text.into())
-}
-
-#[allow(dead_code)]
-pub fn warn_text(text: impl Into<SharedString>) -> impl IntoElement {
-    div().text_xs().text_color(theme::WARN).child(text.into())
-}
-
-pub fn _unused(_: &mut Window, _: &mut App) {
-    let _ = rgb(0x000000);
+        .child(styled(&crate::theme::text::BODY, text).text_size(px(13.0)))
 }

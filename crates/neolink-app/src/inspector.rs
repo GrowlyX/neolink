@@ -1,6 +1,6 @@
 //! Right-hand inspector: everything about the selected display, plus virtual-display controls.
 
-use crate::theme;
+use crate::theme::{self, c, colors, radius, styled, text};
 use crate::ui;
 use gpui::prelude::*;
 use gpui::{div, px, svg, Context};
@@ -23,25 +23,15 @@ impl crate::Neolink {
                         .items_center()
                         .justify_center()
                         .gap_2()
-                        .child(ui::logo(30.0))
+                        .child(ui::logo(28.0))
                         .child(
-                            div()
-                                .text_sm()
-                                .text_color(theme::text_dim())
-                                .child("Select a display"),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme::text_faint())
-                                .child("to configure it"),
+                            styled(&text::BODY, "Select a display.").text_color(theme::text_dim()),
                         ),
                 )
                 .into_any_element();
         };
 
         let index = self.state.selected.unwrap_or(0);
-        let swatch = theme::swatch(index);
         let current_mode = item.cg.as_ref().and_then(|d| d.mode).map(|m| m.id);
         let modes = item.modes.clone();
         let rates = self.state.rates(index);
@@ -49,64 +39,82 @@ impl crate::Neolink {
         let is_virtual = item.is_virtual();
         let cfg = item.virtual_cfg.clone();
 
-        let mut panel = ui::glass(16.0)
+        let mut panel = ui::card()
             .size_full()
             .flex()
             .flex_col()
             .min_h(px(0.0))
-            .p_3()
-            .gap_2()
-            .child(ui::sheen())
+            .p(px(20.0))
+            .gap(px(14.0))
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .gap_2()
-                    .pb_1()
-                    .children(
-                        ui::brand_logo(&item.name)
-                            .map(|path| svg().path(path).w(px(30.0)).h(px(18.0)).flex_none()),
-                    )
-                    .child(ui::dot(swatch))
+                    .flex_col()
+                    .flex_none()
+                    .gap(px(8.0))
                     .child(
                         div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .whitespace_nowrap()
-                            .truncate()
-                            .child(item.name.clone()),
+                            .flex()
+                            .items_center()
+                            .gap(px(10.0))
+                            .children(ui::brand_logo(&item.name).map(|path| {
+                                svg()
+                                    .path(path)
+                                    .w(px(34.0))
+                                    .h(px(20.0))
+                                    .flex_none()
+                                    .text_color(theme::text())
+                            }))
+                            .child(
+                                styled(&text::HEADING_2, item.name.clone())
+                                    .min_w(px(0.0))
+                                    .whitespace_nowrap()
+                                    .truncate(),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(6.0))
+                            .when(item.main, |d| {
+                                d.child(ui::badge("Main", ui::BadgeKind::Strong))
+                            })
+                            .child(ui::badge(
+                                if is_virtual { "Virtual" } else { "Physical" },
+                                ui::BadgeKind::Neutral,
+                            ))
+                            .when(item.vendor.is_some(), |d| {
+                                d.child(ui::badge("DisplayLink", ui::BadgeKind::Neutral))
+                            }),
                     ),
             )
             .child(
                 div()
                     .flex()
-                    .gap_1p5()
-                    .child(ui::chip().flex_none().child(item.size_label()))
-                    .child(ui::chip().flex_none().child(if is_virtual {
-                        "Virtual"
-                    } else {
-                        "Physical"
-                    }))
-                    .when(item.main, |d| d.child(ui::chip().flex_none().child("Main"))),
+                    .flex_col()
+                    .flex_none()
+                    .gap(px(6.0))
+                    .child(ui::stat("Looks like", item.size_label()))
+                    .child(ui::stat("Position", format!("{}, {}", item.x, item.y)))
+                    .child(ui::stat("Rotation", format!("{}°", item.rotation)))
+                    .child(ui::stat(
+                        "Refresh",
+                        match current_hz {
+                            Some(hz) => format!("{hz} Hz"),
+                            None => "-".to_string(),
+                        },
+                    ))
+                    .child(ui::stat(
+                        "Backing",
+                        if item.hidpi {
+                            "2× HiDPI".to_string()
+                        } else {
+                            "1×".to_string()
+                        },
+                    )),
             )
-            .child(ui::divider())
-            .child(ui::stat("Position", format!("{}, {}", item.x, item.y)))
-            .child(ui::stat("Rotation", format!("{}°", item.rotation)))
-            .child(ui::stat(
-                "Refresh",
-                match current_hz {
-                    Some(hz) => format!("{hz} Hz"),
-                    None => "-".to_string(),
-                },
-            ))
-            .child(ui::stat(
-                "Backing",
-                if item.hidpi {
-                    "2× HiDPI".to_string()
-                } else {
-                    "1×".to_string()
-                },
-            ));
+            .child(ui::divider());
 
         // Refresh picker. Only shown when the display really advertises more than one rate at
         // the size it is currently using, so we never invent a timing.
@@ -114,16 +122,12 @@ impl crate::Neolink {
             panel = panel.child(
                 div()
                     .flex()
+                    .flex_none()
                     .items_center()
                     .justify_between()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme::text_dim())
-                            .child("Refresh"),
-                    )
-                    .child(div().flex().gap_1().children(rates.into_iter().map(|hz| {
-                        ui::pill(
+                    .child(styled(&text::LABEL, "Refresh rate"))
+                    .child(ui::segmented().children(rates.into_iter().map(|hz| {
+                        ui::segment(
                             gpui::ElementId::Name(format!("hz-{}-{hz}", item.uuid).into()),
                             format!("{hz} Hz"),
                             current_hz == Some(hz),
@@ -142,21 +146,16 @@ impl crate::Neolink {
         if let Some(v) = &item.vendor {
             panel = panel
                 .child(ui::divider())
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme::text_faint())
-                        .child("DISPLAYLINK"),
-                )
+                .child(styled(&text::LABEL, "DisplayLink"))
                 .child(ui::stat(
                     "Brightness",
                     format!("{:.0}%", v.brightness * 100.0),
                 ))
-                .child(ui::meter(v.brightness as f32, theme::ACCENT))
+                .child(ui::meter(v.brightness as f32, theme::accent()))
                 .child(ui::slider(
                     gpui::ElementId::Name(format!("bright-{}", item.uuid).into()),
                     v.brightness as f32,
-                    theme::ACCENT,
+                    theme::accent(),
                     cx.listener(move |this, set: &ui::SliderSet, _, cx| {
                         if let Err(e) =
                             this.state
@@ -168,11 +167,11 @@ impl crate::Neolink {
                     }),
                 ))
                 .child(ui::stat("Contrast", format!("{:.0}%", v.contrast * 100.0)))
-                .child(ui::meter(v.contrast as f32, theme::ACCENT_SOFT))
+                .child(ui::meter(v.contrast as f32, theme::accent()))
                 .child(ui::slider(
                     gpui::ElementId::Name(format!("contrast-{}", item.uuid).into()),
                     v.contrast as f32,
-                    theme::ACCENT_SOFT,
+                    theme::accent(),
                     cx.listener(move |this, set: &ui::SliderSet, _, cx| {
                         if let Err(e) =
                             this.state
@@ -192,10 +191,11 @@ impl crate::Neolink {
                         .flex()
                         .gap_2()
                         .child(
-                            ui::pill(
+                            ui::button(
                                 "btn-enabled",
-                                if v.enabled { "Enabled" } else { "Disabled" },
-                                v.enabled,
+                                if v.enabled { "Disable" } else { "Enable" },
+                                ui::ButtonKind::Secondary,
+                                true,
                             )
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
@@ -207,7 +207,13 @@ impl crate::Neolink {
                             )),
                         )
                         .child(
-                            ui::pill("btn-flip", "Flip", v.flipped).on_click(cx.listener(
+                            ui::button(
+                                "btn-flip",
+                                if v.flipped { "Unflip" } else { "Flip" },
+                                ui::ButtonKind::Secondary,
+                                true,
+                            )
+                            .on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     if let Err(e) = this.state.toggle_flip(index) {
                                         this.state.status = format!("{e}");
@@ -224,92 +230,109 @@ impl crate::Neolink {
             .id("mode-scroll")
             .flex()
             .flex_col()
-            .gap_1p5()
+            .gap(px(2.0))
             .flex_1()
             .min_h(px(0.0))
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(theme::text_faint())
-                    .child("MODE"),
-            );
+            .overflow_y_scroll();
 
         for m in modes.into_iter().take(24) {
             let active = current_mode == Some(m.id);
             let label = m.label();
             let id = gpui::ElementId::Name(format!("mode-{}-{}", item.uuid, m.id).into());
+            let k = colors();
+            let (fg, sub) = if active {
+                (k.on_accent, k.on_accent)
+            } else {
+                (k.text_primary, k.text_secondary)
+            };
+            let hover = k.overlay_hover;
+            let (size_part, rest) = match label.split_once(" @ ") {
+                Some((a, b)) => (a.to_string(), b.to_string()),
+                None => (label.clone(), String::new()),
+            };
             mode_list = mode_list.child(
                 div()
                     .id(id)
-                    .w_full()
-                    .px_2()
-                    .py_1()
+                    .flex()
                     .flex_none()
-                    .rounded(px(8.0))
-                    .bg(if active {
-                        theme::with_alpha(theme::ACCENT, 0.16)
-                    } else {
-                        theme::TRANSPARENT
+                    .items_center()
+                    .gap(px(8.0))
+                    .h(px(34.0))
+                    .px(px(12.0))
+                    .rounded(px(radius::INNER))
+                    .text_color(c(fg))
+                    .when(active, |el| el.bg(c(k.accent)))
+                    .when(!active, |el| {
+                        el.cursor_pointer()
+                            .hover(move |s| s.bg(c(hover)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Err(e) = this.state.set_mode(index, m.id) {
+                                    this.state.status = format!("Mode change failed: {e}");
+                                }
+                                cx.notify();
+                            }))
                     })
-                    .border_1()
-                    .border_color(if active {
-                        theme::with_alpha(theme::ACCENT, 0.5)
-                    } else {
-                        theme::TRANSPARENT
-                    })
-                    .text_xs()
-                    .text_color(if active {
-                        theme::ACCENT
-                    } else {
-                        theme::text_dim()
-                    })
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme::glass_soft()).text_color(theme::text()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Err(e) = this.state.set_mode(index, m.id) {
-                            this.state.status = format!("Mode change failed: {e}");
-                        }
-                        cx.notify();
-                    }))
-                    .child(label),
+                    .child(styled(&text::CODE, size_part).text_size(px(13.0)).flex_1())
+                    .child(
+                        styled(&text::SUPPORTING, rest)
+                            .text_color(c(sub))
+                            .opacity(0.8),
+                    )
+                    .when(active, |el| {
+                        el.child(
+                            svg()
+                                .path("logo/check.svg")
+                                .size(px(14.0))
+                                .flex_none()
+                                .text_color(c(fg)),
+                        )
+                    }),
             );
         }
-        panel = panel.child(mode_list);
+        panel = panel
+            .child(styled(&text::LABEL, "Resolution").flex_none())
+            .child(mode_list);
 
         // Pinned footer.
         let mut footer = div()
             .flex()
             .flex_col()
             .flex_none()
-            .gap_2()
-            .pt_2()
+            .gap(px(10.0))
+            .pt(px(14.0))
             .border_t_1()
-            .border_color(theme::hairline_soft())
+            .border_color(theme::hairline())
             .child(
                 div()
                     .flex()
                     .gap_2()
                     .child(
-                        ui::pill("btn-main", "Make main", item.main).on_click(cx.listener(
-                            move |this, _, _, cx| {
-                                if let Err(e) = this.state.set_main(index) {
-                                    this.state.status = format!("{e}");
-                                }
-                                cx.notify();
+                        ui::button(
+                            "btn-main",
+                            if item.main {
+                                "Main display"
+                            } else {
+                                "Make main display"
                             },
-                        )),
+                            ui::ButtonKind::Secondary,
+                            !item.main,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Err(e) = this.state.set_main(index) {
+                                this.state.status = format!("{e}");
+                            }
+                            cx.notify();
+                        })),
                     )
                     .child(
-                        ui::pill("btn-remove", "Remove", false).on_click(cx.listener(
-                            move |this, _, _, cx| {
+                        ui::button("btn-remove", "Remove", ui::ButtonKind::Ghost, true).on_click(
+                            cx.listener(move |this, _, _, cx| {
                                 if let Err(e) = this.state.remove(index) {
                                     this.state.status = format!("{e}");
                                 }
                                 cx.notify();
-                            },
-                        )),
+                            }),
+                        ),
                     ),
             );
 
@@ -322,12 +345,7 @@ impl crate::Neolink {
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme::text_dim())
-                                .child("HiDPI backing"),
-                        )
+                        .child(ui::label("HiDPI backing"))
                         .child(ui::toggle("toggle-hidpi", cfg.hidpi).on_click(cx.listener(
                             move |this, _, _, cx| {
                                 let mut updated = next.clone();
@@ -344,15 +362,10 @@ impl crate::Neolink {
                         .flex()
                         .items_center()
                         .justify_between()
+                        .child(ui::label("Rotation"))
                         .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme::text_dim())
-                                .child("Rotation"),
-                        )
-                        .child(div().flex().gap_1().children(
-                            [0u32, 90, 180, 270].into_iter().map(|deg| {
-                                ui::pill(
+                            ui::segmented().children([0u32, 90, 180, 270].into_iter().map(|deg| {
+                                ui::segment(
                                     gpui::ElementId::Name(format!("rot-{deg}").into()),
                                     format!("{deg}°"),
                                     rot == deg,
@@ -365,8 +378,8 @@ impl crate::Neolink {
                                         cx.notify();
                                     },
                                 ))
-                            }),
-                        )),
+                            })),
+                        ),
                 );
         }
 
@@ -381,47 +394,39 @@ impl crate::Neolink {
             .collect();
         if !targets.is_empty() {
             let mirrored = item.mirrored;
-            footer =
-                footer.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme::text_dim())
-                                .child("Mirror"),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .gap_1()
-                                .child(ui::pill("mirror-off", "None", !mirrored).on_click(
-                                    cx.listener(move |this, _, _, cx| {
-                                        if let Err(e) = this.state.set_mirror(index, None) {
+            footer = footer.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(ui::label("Mirror"))
+                    .child(
+                        ui::segmented()
+                            .child(ui::segment("mirror-off", "None", !mirrored).on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    if let Err(e) = this.state.set_mirror(index, None) {
+                                        this.state.status = format!("{e}");
+                                    }
+                                    cx.notify();
+                                }),
+                            ))
+                            .children(targets.into_iter().take(2).map(|(i, name)| {
+                                ui::segment(
+                                    gpui::ElementId::Name(format!("mirror-{i}").into()),
+                                    name,
+                                    false,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        if let Err(e) = this.state.set_mirror(index, Some(i)) {
                                             this.state.status = format!("{e}");
                                         }
                                         cx.notify();
-                                    }),
+                                    },
                                 ))
-                                .children(targets.into_iter().take(2).map(|(i, name)| {
-                                    ui::pill(
-                                        gpui::ElementId::Name(format!("mirror-{i}").into()),
-                                        name,
-                                        false,
-                                    )
-                                    .on_click(cx.listener(
-                                        move |this, _, _, cx| {
-                                            if let Err(e) = this.state.set_mirror(index, Some(i)) {
-                                                this.state.status = format!("{e}");
-                                            }
-                                            cx.notify();
-                                        },
-                                    ))
-                                })),
-                        ),
-                );
+                            })),
+                    ),
+            );
         }
 
         panel.child(footer).into_any_element()

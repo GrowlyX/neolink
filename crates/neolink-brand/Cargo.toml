@@ -1,0 +1,8 @@
+[package]
+name = "neolink-brand"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The Neolink logo as computed geometry, and the Neolink design tokens (Astryx neolink theme). No dependencies."
+
+[dependencies]

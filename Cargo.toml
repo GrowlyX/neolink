@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/neolink-core", "crates/neolink-app"]
+members = ["crates/neolink-brand", "crates/neolink-core", "crates/neolink-app"]
 
 [workspace.package]
 version = "0.1.0"

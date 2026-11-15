@@ -16,8 +16,7 @@ use std::borrow::Cow;
 use gpui::AsyncApp;
 use gpui::{
     div, point, prelude::*, px, size, svg, App, Application, AssetSource, Bounds, Context,
-    SharedString, Window, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowOptions,
+    SharedString, Window, WindowAppearance, WindowBounds, WindowOptions,
 };
 use state::AppState;
 
@@ -41,7 +40,9 @@ impl Neolink {
         });
         Self {
             state: AppState::new(),
-            settings_open: false,
+            // Debug builds can open with the panel showing, to iterate on its layout.
+            settings_open: cfg!(debug_assertions)
+                && std::env::var_os("NEOLINK_OPEN_SETTINGS").is_some(),
             light_theme: load_theme_preference(),
             drag_anchor: None,
             notify_rx: subscribed.then_some(rx),
@@ -65,6 +66,12 @@ impl Neolink {
     }
 }
 
+// Layout, in logical pixels, shared with the reference design.
+const TOP_BAR: f32 = 60.0;
+const PAD: f32 = 24.0;
+const GAP: f32 = 16.0;
+const SIDE: f32 = 340.0;
+
 impl Render for Neolink {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         theme::set_light_mode(self.light_theme.unwrap_or(matches!(
@@ -75,41 +82,39 @@ impl Render for Neolink {
             .flex()
             .flex_col()
             .size_full()
+            .relative()
             .bg(theme::base_top())
             .text_color(theme::text())
-            .font_family("Geist")
-            .relative()
-            .child(self.header(cx))
+            .font_family(theme::text::BODY.family)
+            .text_size(px(theme::text::BODY.size))
+            .child(self.top_bar(cx))
             .child(
                 div()
                     .flex()
-                    .flex_row()
                     .flex_1()
                     .min_h(px(0.0))
-                    .gap(px(20.0))
-                    .px(px(28.0))
-                    .pb(px(20.0))
+                    .gap(px(GAP))
+                    .px(px(PAD))
+                    .pb(px(PAD))
                     .child(
                         div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .h_full()
                             .flex()
                             .flex_col()
-                            .gap(px(14.0))
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .gap(px(GAP))
                             .child(self.workspace_header(cx))
-                            .child(self.canvas(cx))
+                            .child(div().flex_1().min_h(px(0.0)).child(self.canvas(window, cx)))
                             .child(self.workspace_actions(cx)),
                     )
                     .child(
                         div()
-                            .w(px(340.0))
+                            .w(px(SIDE))
                             .flex_none()
                             .h_full()
                             .child(self.inspector(cx)),
                     ),
             )
-            .child(self.status_bar())
             .when(self.settings_open, |root| {
                 root.child(self.settings_panel(cx))
             })
@@ -120,221 +125,384 @@ impl Render for Neolink {
 }
 
 impl Neolink {
-    fn status_bar(&self) -> impl IntoElement {
-        div()
-            .h(px(38.0))
-            .px(px(28.0))
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .text_size(px(13.0))
-            .text_color(theme::text_faint())
-            .child(
-                div()
-                    .flex_1()
-                    .whitespace_nowrap()
-                    .truncate()
-                    .text_color(if self.state.status.contains("failed") {
-                        theme::DANGER
-                    } else {
-                        theme::text_faint()
-                    })
-                    .child(self.state.status.clone()),
-            )
-            .child(format!(
-                "{} display{}",
-                self.state.items.len(),
-                if self.state.items.len() == 1 { "" } else { "s" }
-            ))
-    }
-
-    fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let agent = &self.state.agent;
-        let status_color = match (agent.installed, agent.running) {
-            (true, true) => theme::OK,
-            (true, false) => theme::WARN,
-            _ => theme::text_faint(),
-        };
-        let status_text = if agent.installed {
-            match (&agent.version, agent.running) {
-                (Some(v), true) => format!("DisplayLink {v} running"),
-                (Some(v), false) => format!("DisplayLink {v} installed"),
-                (None, true) => "DisplayLink running".into(),
-                (None, false) => "DisplayLink installed".into(),
-            }
-        } else {
-            "DisplayLink not installed".into()
-        };
-
+    fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
-            .flex_row()
+            .flex_none()
             .items_center()
+            .h(px(TOP_BAR))
+            // clear the window's close / minimise / zoom buttons
+            .pl(px(92.0))
+            .pr(px(PAD))
             .gap(px(12.0))
-            .h(px(72.0))
-            .px(px(28.0))
             .child(
                 svg()
                     .path("logo/neolink-lockup.svg")
-                    .w(px(148.0))
-                    .h(px(25.0)),
+                    .w(px(122.0))
+                    .h(px(18.0))
+                    .flex_none()
+                    .text_color(theme::text()),
             )
             .child(div().flex_1())
             .child(
                 div()
+                    .id("settings-button")
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
-                    .px(px(13.0))
-                    .py(px(7.0))
-                    .rounded_full()
-                    .bg(theme::glass_soft())
-                    .border_1()
-                    .border_color(theme::hairline_soft())
-                    .child(ui::dot(status_color))
+                    .justify_center()
+                    .size(px(40.0))
+                    .rounded(px(theme::radius::INNER))
+                    .cursor_pointer()
+                    .when(self.settings_open, |el| {
+                        el.bg(theme::c(theme::colors().overlay_pressed))
+                    })
+                    .hover(|s| s.bg(theme::sheen()))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.settings_open = !this.settings_open;
+                        cx.notify();
+                    }))
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme::text_dim())
-                            .child(status_text),
+                        svg()
+                            .path("logo/settings.svg")
+                            .size(px(24.0))
+                            .text_color(theme::text_dim()),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        ui::pill("btn-refresh", "Refresh", false).on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.state.refresh();
-                                this.state.status = "Refreshed".into();
-                                cx.notify();
-                            },
-                        )),
-                    )
-                    .child(
-                        div()
-                            .id("settings-button")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(36.0))
-                            .rounded(px(9.0))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme::glass_soft()))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.settings_open = !this.settings_open;
-                                cx.notify();
-                            }))
-                            .child(svg().path("logo/settings.svg").size(px(18.0))),
-                    ),
-            )
+    }
+
+    fn displaylink_label(&self) -> String {
+        let agent = &self.state.agent;
+        if agent.installed {
+            match (&agent.version, agent.running) {
+                (Some(v), true) => format!("DisplayLink {v}"),
+                (Some(v), false) => format!("DisplayLink {v} stopped"),
+                (None, true) => "DisplayLink".into(),
+                (None, false) => "DisplayLink stopped".into(),
+            }
+        } else {
+            "No DisplayLink driver".into()
+        }
     }
 
     fn workspace_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div().flex().items_end().h(px(62.0)).child(
-            div().flex().flex_col().gap(px(3.0)).flex_1()
-                .child(div().text_size(px(25.0)).font_weight(gpui::FontWeight::MEDIUM).child("Arrangement"))
-                .child(div().text_size(px(14.0)).text_color(theme::text_dim()).child("Drag a display to where it sits on your desk. The bar marks the main display.")),
-        ).children((self.state.agent.installed && !self.state.agent.running).then(|| {
-            ui::pill("start-agent", "Start agent", false).on_click(cx.listener(|this, _, _, cx| {
-                this.state.status = match neolink_core::agent::start() { Ok(()) => "DisplayLink agent started".into(), Err(e) => format!("{e}") };
-                this.state.refresh();
-                cx.notify();
-            }))
-        })).child(
-            ui::pill("btn-install", if self.state.busy() { "Installing…" } else if self.state.agent.installed { "Reinstall DisplayLink" } else { "Get DisplayLink" }, !self.state.agent.installed)
-                .on_click(cx.listener(|this, _, _, cx| { this.state.provision(); cx.notify(); })),
-        )
-    }
-
-    fn workspace_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let can_save = !self.state.items.is_empty();
+        let agent = &self.state.agent;
+        let busy = self.state.busy();
         div()
             .flex()
-            .items_center()
-            .h(px(36.0))
-            .gap(px(10.0))
+            .flex_none()
+            .items_end()
+            .gap(px(8.0))
+            .h(px(56.0))
             .child(
                 div()
+                    .flex()
+                    .flex_col()
                     .flex_1()
-                    .text_size(px(13.0))
-                    .text_color(theme::text_dim())
-                    .child(if self.state.dirty {
-                        "Unsaved display changes"
-                    } else {
-                        "Everything matches your displays."
-                    }),
+                    .min_w(px(0.0))
+                    .child(theme::styled(&theme::text::HEADING_1, "Arrangement"))
+                    .child(
+                        theme::styled(
+                            &theme::text::BODY,
+                            "Drag a display to where it sits on your desk. The bar marks the main display.",
+                        )
+                        .text_color(theme::text_dim()),
+                    ),
             )
             .child(
-                ui::pill("save-layout", "Save layout", can_save).on_click(cx.listener(
-                    |this, _, _, cx| {
+                ui::button("btn-refresh", "Rescan", ui::ButtonKind::Ghost, true).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.state.refresh();
+                        this.state.status = "Rescanned displays.".into();
+                        cx.notify();
+                    }),
+                ),
+            )
+            .children((agent.installed && !agent.running).then(|| {
+                ui::button("start-agent", "Start agent", ui::ButtonKind::Secondary, true).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.state.status = match neolink_core::agent::start() {
+                            Ok(()) => "DisplayLink agent started.".into(),
+                            Err(e) => format!("{e}"),
+                        };
+                        this.state.refresh();
+                        cx.notify();
+                    }),
+                )
+            }))
+            .child(
+                ui::button(
+                    "btn-install",
+                    if busy {
+                        "Installing…"
+                    } else if agent.installed {
+                        "Reinstall DisplayLink"
+                    } else {
+                        "Get DisplayLink"
+                    },
+                    if agent.installed {
+                        ui::ButtonKind::Secondary
+                    } else {
+                        ui::ButtonKind::Primary
+                    },
+                    !busy,
+                )
+                .when(!busy, |el| {
+                    el.on_click(cx.listener(|this, _, _, cx| {
+                        this.state.provision();
+                        cx.notify();
+                    }))
+                }),
+            )
+    }
+
+    /// Status on the left, the layout actions on the right.
+    fn workspace_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let can_save = !self.state.items.is_empty();
+        let failed = self.state.status.contains("failed") || self.state.status.contains("Failed");
+        let status: String = if !self.state.status.is_empty() {
+            self.state.status.clone()
+        } else if self.state.dirty {
+            "Unsaved display changes.".into()
+        } else {
+            "Everything matches your displays.".into()
+        };
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(8.0))
+            .h(px(36.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .gap(px(8.0))
+                    .child(
+                        theme::styled(&theme::text::BODY, status)
+                            .when(failed, |el| {
+                                el.text_color(theme::text())
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                            })
+                            .when(!failed, |el| el.text_color(theme::text_dim()))
+                            .whitespace_nowrap()
+                            .truncate(),
+                    )
+                    .child(
+                        theme::styled(&theme::text::BODY, self.displaylink_label())
+                            .text_color(theme::text_faint())
+                            .whitespace_nowrap(),
+                    ),
+            )
+            .child(
+                ui::button(
+                    "save-layout",
+                    "Save layout",
+                    ui::ButtonKind::Ghost,
+                    can_save,
+                )
+                .when(can_save, |el| {
+                    el.on_click(cx.listener(|this, _, _, cx| {
                         this.state.status = match this.state.save() {
-                            Ok(()) => "Layout saved".into(),
+                            Ok(()) => "Layout saved.".into(),
                             Err(e) => format!("Save failed: {e}"),
                         };
                         cx.notify();
-                    },
-                )),
+                    }))
+                }),
             )
             .child(
-                ui::pill("add-display", "+ Add virtual display", true).on_click(cx.listener(
-                    |this, _, _, cx| {
-                        let cfg = neolink_core::virtual_display::VirtualDisplayConfig {
-                            modes: state::suggested_modes(),
-                            hidpi: true,
-                            ..Default::default()
-                        };
-                        if let Err(e) = this.state.add_virtual(cfg) {
-                            this.state.status = format!("Could not create display: {e}");
-                        }
-                        cx.notify();
-                    },
-                )),
+                ui::button(
+                    "add-display",
+                    "Add virtual display",
+                    ui::ButtonKind::Secondary,
+                    true,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let cfg = neolink_core::virtual_display::VirtualDisplayConfig {
+                        modes: state::suggested_modes(),
+                        hidpi: true,
+                        ..Default::default()
+                    };
+                    if let Err(e) = this.state.add_virtual(cfg) {
+                        this.state.status = format!("Could not create display: {e}");
+                    }
+                    cx.notify();
+                })),
             )
     }
 
     fn settings_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let accessibility_ok = accessibility_allowed();
-        div().absolute().top(px(62.0)).right(px(24.0)).w(px(420.0)).p(px(20.0))
-            .flex().flex_col().gap(px(15.0)).rounded(px(14.0)).bg(theme::base_bottom())
-            .border_1().border_color(theme::hairline()).shadow_lg()
-            .child(div().flex().items_center().justify_between()
-                .child(div().text_size(px(18.0)).font_weight(gpui::FontWeight::MEDIUM).child("Settings"))
-                .child(ui::pill("close-settings", "×", false).on_click(cx.listener(|this, _, _, cx| { this.settings_open = false; cx.notify(); }))))
-            .child(ui::divider())
-            .child(div().text_xs().text_color(theme::text_faint()).child("APPEARANCE"))
-            .child(div().flex().items_center().justify_between()
-                .child(div().flex().flex_col().gap(px(3.0)).child(div().text_sm().child("Theme")).child(div().text_xs().text_color(theme::text_faint()).child("Choose the Neolink color theme.")))
-                .child(div().flex().gap(px(4.0)).p(px(3.0)).rounded(px(9.0)).bg(theme::glass_soft())
-                    .child(ui::pill("theme-system", "System", self.light_theme.is_none()).on_click(cx.listener(|this, _, _, cx| { this.light_theme = None; save_theme_preference(None); cx.notify(); })))
-                    .child(ui::pill("theme-dark", "Dark", self.light_theme == Some(false)).on_click(cx.listener(|this, _, _, cx| { this.light_theme = Some(false); save_theme_preference(Some(false)); cx.notify(); })))
-                    .child(ui::pill("theme-light", "Light", self.light_theme == Some(true)).on_click(cx.listener(|this, _, _, cx| { this.light_theme = Some(true); save_theme_preference(Some(true)); cx.notify(); })))
+        let screen_ok = self.state.capture_allowed;
+        let agent = &self.state.agent;
+        let row = |title: &'static str, detail: String| {
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(16.0))
+                .py(px(10.0))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .gap(px(3.0))
+                        .child(theme::styled(&theme::text::BODY, title))
+                        .child(
+                            theme::styled(&theme::text::SUPPORTING, detail)
+                                .text_color(theme::text_dim()),
+                        ),
                 )
+        };
+        let granted = |ok: bool| {
+            ui::badge(
+                if ok { "Granted" } else { "Not granted" },
+                if ok {
+                    ui::BadgeKind::Strong
+                } else {
+                    ui::BadgeKind::Neutral
+                },
             )
-            .child(div().text_xs().text_color(theme::text_faint()).child("LOGIN"))
-            .child(div().flex().items_center().justify_between()
-                .child(div().flex().flex_col().gap(px(3.0)).child(div().text_sm().child("Open on login")).child(div().text_xs().text_color(theme::text_faint()).child("Start Neolink when you sign in.")))
-                .child(ui::toggle("toggle-login", self.state.launch_at_login).on_click(cx.listener(|this, _, _, cx| { this.state.toggle_login_item(); cx.notify(); }))))
+        };
+        let theme_segment =
+            |id: &'static str, label: &'static str, value: Option<bool>, cx: &mut Context<Self>| {
+                ui::segment(id, label, self.light_theme == value).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.light_theme = value;
+                        save_theme_preference(value);
+                        cx.notify();
+                    },
+                ))
+            };
+
+        ui::card()
+            .id("settings-panel")
+            .occlude()
+            .absolute()
+            .top(px(TOP_BAR + 4.0))
+            .right(px(PAD))
+            .w(px(500.0))
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .p(px(22.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(theme::styled(&theme::text::HEADING_1, "Settings"))
+                    .child(
+                        ui::button("close-settings", "Done", ui::ButtonKind::Ghost, true).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.settings_open = false;
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.0))
+                    .child(theme::styled(&theme::text::LABEL, "Appearance"))
+                    .child(
+                        div().flex().child(
+                            ui::segmented()
+                                .child(theme_segment("theme-system", "Auto", None, cx))
+                                .child(theme_segment("theme-light", "Light", Some(true), cx))
+                                .child(theme_segment("theme-dark", "Dark", Some(false), cx)),
+                        ),
+                    ),
+            )
             .child(ui::divider())
-            .child(div().text_xs().text_color(theme::text_faint()).child("PERMISSIONS"))
-            .child(div().flex().items_center().justify_between()
-                .child(div().flex().flex_col().gap(px(3.0)).child(div().text_sm().child("Screen Recording")).child(div().text_xs().text_color(theme::text_faint()).child("Used for future screen previews.")))
-                .child(ui::pill("permission-screen", if self.state.capture_allowed { "Granted" } else { "Open settings" }, self.state.capture_allowed).on_click(cx.listener(|this, _, _, cx| {
-                    if !this.state.capture_allowed { let _ = neolink_core::displays::request_screen_capture(); let _ = std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture").spawn(); }
-                    cx.notify();
-                }))))
-            .child(div().flex().items_center().justify_between()
-                .child(div().flex().flex_col().gap(px(3.0)).child(div().text_sm().child("Accessibility")).child(div().text_xs().text_color(theme::text_faint()).child("Used for future display automation.")))
-                .child(ui::pill("permission-accessibility", if accessibility_ok { "Granted" } else { "Open settings" }, accessibility_ok).on_click(cx.listener(move |_, _, _, _| {
-                    if !accessibility_ok { let _ = std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").spawn(); }
-                }))))
+            .child(
+                row("Open on login", "Start Neolink when you sign in.".into())
+                    .id("toggle-login-row")
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.state.toggle_login_item();
+                        cx.notify();
+                    }))
+                    .child(ui::toggle("toggle-login", self.state.launch_at_login)),
+            )
             .child(ui::divider())
-            .child(div().text_xs().text_color(theme::text_faint()).child("SETUP"))
-            .child(div().flex().items_center().justify_between()
-                .child(div().flex().flex_col().gap(px(3.0)).child(div().text_sm().child("Setup assistant")).child(div().text_xs().text_color(theme::text_faint()).child("Driver, permissions and startup, step by step.")))
-                .child(ui::pill("rerun-setup", "Run again", false).on_click(cx.listener(|this, _, _, cx| { this.settings_open = false; this.setup = Some(setup::Step::Welcome); cx.notify(); }))))
+            .child(theme::styled(&theme::text::LABEL, "DisplayLink"))
+            .child(
+                row(
+                    "Driver",
+                    if agent.installed {
+                        format!(
+                            "{} {}",
+                            self.displaylink_label(),
+                            if agent.running { "is running." } else { "is installed." }
+                        )
+                    } else {
+                        "Needed for DisplayLink docks and adapters.".into()
+                    },
+                )
+                .child(ui::badge(
+                    if agent.installed { "Installed" } else { "Not installed" },
+                    if agent.installed {
+                        ui::BadgeKind::Strong
+                    } else {
+                        ui::BadgeKind::Neutral
+                    },
+                )),
+            )
+            .child(ui::divider())
+            .child(theme::styled(&theme::text::LABEL, "Permissions"))
+            .child(
+                row("Screen Recording", "For future screen previews.".into()).child(if screen_ok {
+                    granted(true).into_any_element()
+                } else {
+                    ui::button("grant-screen", "Allow", ui::ButtonKind::Secondary, true)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let _ = neolink_core::displays::request_screen_capture();
+                            let _ = std::process::Command::new("open")
+                                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+                                .spawn();
+                            this.state.status =
+                                "Allow Neolink in Privacy & Security › Screen Recording.".into();
+                            cx.notify();
+                        }))
+                        .into_any_element()
+                }),
+            )
+            .child(
+                row("Accessibility", "For future display automation.".into()).child(
+                    if accessibility_ok {
+                        granted(true).into_any_element()
+                    } else {
+                        ui::button("grant-accessibility", "Allow", ui::ButtonKind::Secondary, true)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let _ = std::process::Command::new("open")
+                                    .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                                    .spawn();
+                                this.state.status =
+                                    "Allow Neolink in Privacy & Security › Accessibility.".into();
+                                cx.notify();
+                            }))
+                            .into_any_element()
+                    },
+                ),
+            )
+            .child(ui::divider())
+            .child(
+                row("Setup assistant", "Driver, permissions and startup, step by step.".into()).child(
+                    ui::button("rerun-setup", "Run again", ui::ButtonKind::Secondary, true).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.settings_open = false;
+                            this.setup = Some(setup::Step::Welcome);
+                            cx.notify();
+                        }),
+                    ),
+                ),
+            )
     }
 }
 
@@ -385,6 +553,7 @@ impl AssetSource for Assets {
         let bytes: Option<&'static [u8]> = match path {
             "logo/neolink-lockup.svg" => Some(include_bytes!("../assets/logo/neolink-lockup.svg")),
             "logo/settings.svg" => Some(include_bytes!("../assets/logo/settings.svg")),
+            "logo/check.svg" => Some(include_bytes!("../assets/logo/check.svg")),
             "logo/neolink-mark.svg" => {
                 Some(include_bytes!("../assets/brand/neolink-mark-white.svg"))
             }
@@ -448,17 +617,17 @@ fn main() {
             Cow::Borrowed(include_bytes!("../assets/fonts/Geist-Medium.ttf")),
             Cow::Borrowed(include_bytes!("../assets/fonts/Geist-SemiBold.ttf")),
             Cow::Borrowed(include_bytes!("../assets/fonts/Geist-Thin.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/Geist-Bold.ttf")),
         ]);
-        let bounds = Bounds::centered(None, size(px(1180.0), px(720.0)), cx);
+        let bounds = Bounds::centered(None, size(px(1180.0), px(760.0)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_background: WindowBackgroundAppearance::Blurred,
-                window_min_size: Some(size(px(1020.0), px(640.0))),
+                window_min_size: Some(size(px(980.0), px(660.0))),
                 titlebar: Some(gpui::TitlebarOptions {
                     title: Some("Neolink".into()),
                     appears_transparent: true,
-                    traffic_light_position: Some(point(px(14.0), px(16.0))),
+                    traffic_light_position: Some(point(px(20.0), px(22.0))),
                 }),
                 ..Default::default()
             },

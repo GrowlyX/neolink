@@ -785,22 +785,6 @@ impl AppState {
         Ok(())
     }
 
-    /// Points of desktop space per canvas point. Mirrors the fit logic in the canvas renderer.
-    pub fn canvas_scale(&self) -> f32 {
-        let total_w: f32 = self
-            .items
-            .iter()
-            .map(|i| i.width as f32)
-            .sum::<f32>()
-            .max(1.0);
-        let max_h: f32 = self
-            .items
-            .iter()
-            .map(|i| i.height as f32)
-            .fold(1.0f32, f32::max);
-        (520.0 / total_w).min(380.0 / max_h).min(0.22) * self.canvas_zoom
-    }
-
     pub fn scale_step(&mut self, delta: f32) {
         self.canvas_zoom = (self.canvas_zoom + delta).clamp(0.5, 2.0);
     }

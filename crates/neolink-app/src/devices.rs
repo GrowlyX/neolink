@@ -36,7 +36,7 @@ impl crate::Neolink {
 
         for (index, item) in items.iter().enumerate() {
             let selected = self.state.selected == Some(index);
-            let swatch = theme::swatch(index);
+            let swatch = theme::accent();
             let name = item.name.clone();
             let sub = format!("{}  ·  {}, {}", item.size_label(), item.x, item.y);
             let enabled = item.enabled;
@@ -93,7 +93,7 @@ impl crate::Neolink {
                     )
                     .when(item.main, |d| d.child(ui::chip().child("MAIN")))
                     .child(ui::dot(if enabled {
-                        theme::OK
+                        theme::ok()
                     } else {
                         theme::text_faint()
                     })),

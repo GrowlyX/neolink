@@ -3299,12 +3299,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui",
+ "neolink-brand",
  "neolink-core",
  "objc2",
  "raw-window-handle",
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "neolink-brand"
+version = "0.1.0"
 
 [[package]]
 name = "neolink-core"

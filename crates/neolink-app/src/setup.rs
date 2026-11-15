@@ -6,6 +6,8 @@
 //! skipped and re-run later from Settings.
 
 use crate::state::VendorPhase;
+use crate::theme;
+use crate::ui;
 use gpui::prelude::*;
 use gpui::{div, px, svg, Animation, AnimationExt, Context, Div, FontWeight, Rgba, SharedString};
 use neolink_core::vendor::{self, Stage};
@@ -88,117 +90,40 @@ fn mib(bytes: u64) -> String {
     format!("{:.1} MB", bytes as f64 / 1_000_000.0)
 }
 
-/// The assistant is strictly black and white: ink on paper, with opacity as the only
-/// hierarchy. No hues, gradients or shadows.
+/// Token roles for the assistant, so it reads exactly like the rest of the app.
 mod mono {
-    use crate::theme;
-    use gpui::prelude::*;
-    use gpui::{div, px, Div, Hsla, Rgba, SharedString};
+    use crate::theme::{c, colors};
+    use gpui::Rgba;
 
-    fn tone(white: bool, a: f32) -> Rgba {
-        let v = if white { 1.0 } else { 0.0 };
-        Rgba {
-            r: v,
-            g: v,
-            b: v,
-            a,
-        }
-    }
     pub fn ink() -> Rgba {
-        tone(!theme::is_light(), 1.0)
-    }
-    pub fn paper() -> Rgba {
-        tone(theme::is_light(), 1.0)
-    }
-    fn ink_a(a: f32) -> Rgba {
-        tone(!theme::is_light(), a)
+        c(colors().text_primary)
     }
     pub fn dim() -> Rgba {
-        ink_a(0.72)
+        c(colors().text_secondary)
     }
     pub fn faint() -> Rgba {
-        ink_a(0.5)
+        c(colors().text_disabled)
     }
     pub fn line() -> Rgba {
-        ink_a(0.2)
+        c(colors().border)
     }
     pub fn line_soft() -> Rgba {
-        ink_a(0.11)
+        c(colors().border)
     }
     pub fn wash() -> Rgba {
-        ink_a(0.05)
+        c(colors().background_muted)
+    }
+    pub fn paper() -> Rgba {
+        c(colors().background_card)
     }
     pub fn scrim() -> Rgba {
-        tone(theme::is_light(), 0.9)
+        c(colors().overlay)
     }
-    pub fn divider() -> impl IntoElement {
-        div().h(px(1.0)).w_full().bg(line_soft())
+    pub fn divider() -> impl gpui::IntoElement {
+        crate::ui::divider()
     }
-    pub fn dot(color: impl Into<Hsla>) -> impl IntoElement {
-        div()
-            .size(px(6.0))
-            .flex_none()
-            .rounded_full()
-            .bg(color.into())
-    }
-    /// Outline pill; `active` fills it with ink.
-    pub fn pill(
-        id: impl Into<gpui::ElementId>,
-        text: impl Into<SharedString>,
-        active: bool,
-    ) -> gpui::Stateful<Div> {
-        let el = div()
-            .id(id.into())
-            .px(px(12.0))
-            .py(px(5.0))
-            .rounded_full()
-            .border_1()
-            .text_xs()
-            .cursor_pointer()
-            .child(text.into());
-        if active {
-            el.bg(ink()).border_color(ink()).text_color(paper())
-        } else {
-            el.border_color(line())
-                .text_color(dim())
-                .hover(|s| s.border_color(ink()).text_color(ink()))
-        }
-    }
-    pub fn toggle(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<Div> {
-        div()
-            .id(id.into())
-            .relative()
-            .w(px(34.0))
-            .h(px(20.0))
-            .flex_none()
-            .rounded_full()
-            .border_1()
-            .border_color(if on { ink() } else { line() })
-            .bg(if on { ink() } else { paper() })
-            .cursor_pointer()
-            .child(
-                div()
-                    .absolute()
-                    .top(px(2.0))
-                    .left(px(if on { 16.0 } else { 2.0 }))
-                    .size(px(14.0))
-                    .rounded_full()
-                    .bg(if on { paper() } else { faint() }),
-            )
-    }
-    pub fn meter(ratio: f32, color: impl Into<Hsla>) -> impl IntoElement {
-        div()
-            .h(px(3.0))
-            .w_full()
-            .rounded_full()
-            .bg(line_soft())
-            .child(
-                div()
-                    .h_full()
-                    .w(gpui::relative(ratio.clamp(0.0, 1.0)))
-                    .rounded_full()
-                    .bg(color.into()),
-            )
+    pub fn dot(color: impl Into<gpui::Hsla>) -> impl gpui::IntoElement {
+        crate::ui::dot(color)
     }
 }
 
@@ -227,44 +152,11 @@ fn badge(path: &'static str, tint: Rgba) -> impl IntoElement {
 }
 
 fn primary(id: &'static str, text: impl Into<SharedString>, enabled: bool) -> gpui::Stateful<Div> {
-    let el = div()
-        .id(id)
-        .h(px(36.0))
-        .px(px(18.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(10.0))
-        .text_size(px(13.0))
-        .font_weight(FontWeight::MEDIUM)
-        .child(text.into());
-    if enabled {
-        el.bg(mono::ink())
-            .text_color(mono::paper())
-            .cursor_pointer()
-            .hover(|s| s.opacity(0.86))
-            .active(|s| s.opacity(0.85))
-    } else {
-        el.bg(mono::wash())
-            .text_color(mono::faint())
-            .border_1()
-            .border_color(mono::line_soft())
-    }
+    ui::button(id, text, ui::ButtonKind::Primary, enabled)
 }
 
 fn ghost(id: &'static str, text: impl Into<SharedString>) -> gpui::Stateful<Div> {
-    div()
-        .id(id)
-        .h(px(36.0))
-        .px(px(14.0))
-        .flex()
-        .items_center()
-        .rounded(px(10.0))
-        .text_size(px(13.0))
-        .text_color(mono::dim())
-        .cursor_pointer()
-        .hover(|s| s.bg(mono::wash()).text_color(mono::ink()))
-        .child(text.into())
+    ui::button(id, text, ui::ButtonKind::Ghost, true)
 }
 
 /// Inset well that groups related rows inside the card.
@@ -330,14 +222,7 @@ fn kv(first: bool, key: &'static str, value: impl Into<SharedString>) -> impl In
 }
 
 fn granted() -> impl IntoElement {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(5.0))
-        .text_size(px(12.0))
-        .text_color(mono::ink())
-        .child(icon("icons/check.svg", 13.0, mono::ink()))
-        .child("Granted")
+    ui::badge("Granted", ui::BadgeKind::Strong)
 }
 
 /// One line of the install timeline: done, active, or still to come.
@@ -433,7 +318,7 @@ impl crate::Neolink {
                     .w(px(600.0))
                     .flex()
                     .flex_col()
-                    .rounded(px(20.0))
+                    .rounded(px(theme::radius::CONTAINER))
                     .bg(mono::paper())
                     .border_1()
                     .border_color(mono::line())
@@ -483,10 +368,7 @@ impl crate::Neolink {
             Step::Done => None,
             _ if busy => None,
             _ => Some(
-                ghost("setup-back", "")
-                    .gap(px(4.0))
-                    .child(icon("icons/chevron-left.svg", 14.0, mono::dim()))
-                    .child("Back")
+                ghost("setup-back", "Back")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.setup = Some(step.prev());
                         cx.notify();
@@ -632,7 +514,7 @@ impl crate::Neolink {
                             .gap(px(6.0))
                             .child(
                                 div()
-                                    .text_size(px(26.0))
+                                    .text_size(px(theme::text::HEADING_1.size))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child("Welcome to Neolink"),
                             )
@@ -670,101 +552,107 @@ impl crate::Neolink {
                 format!("{}…{}", &digest[..12], &digest[digest.len() - 12..]),
             ));
 
-        let status: gpui::AnyElement =
-            match &phase {
-                VendorPhase::Working { stage, done, total } => {
-                    let rank = stage_rank(*stage);
-                    let line = |label, r: i8, detail| {
-                        stage_line(
-                            label,
-                            if rank > r {
-                                1
-                            } else if rank == r {
-                                0
-                            } else {
-                                -1
-                            },
-                            detail,
-                        )
-                    };
-                    let ratio = if *total > 0 {
-                        *done as f32 / *total as f32
-                    } else {
-                        0.0
-                    };
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(10.0))
-                        .child(line(
-                            "Download",
-                            0,
-                            (rank == 0).then(|| format!("{} of {}", mib(*done), mib(*total))),
-                        ))
-                        .when(rank == 0, |d| {
-                            d.child(div().pl(px(28.0)).child(mono::meter(ratio, mono::ink())))
-                        })
-                        .child(line("Verify checksum", 1, None))
-                        .child(line("Unpack", 2, None))
-                        .child(line(
-                            "Install",
-                            3,
-                            (rank == 3).then(|| "Waiting for administrator approval".to_string()),
-                        ))
-                        .into_any_element()
-                }
-                VendorPhase::Failed(msg) => div()
+        let status: gpui::AnyElement = match &phase {
+            VendorPhase::Working { stage, done, total } => {
+                let rank = stage_rank(*stage);
+                let line = |label, r: i8, detail| {
+                    stage_line(
+                        label,
+                        if rank > r {
+                            1
+                        } else if rank == r {
+                            0
+                        } else {
+                            -1
+                        },
+                        detail,
+                    )
+                };
+                let ratio = if *total > 0 {
+                    *done as f32 / *total as f32
+                } else {
+                    0.0
+                };
+                div()
                     .flex()
-                    .items_start()
+                    .flex_col()
                     .gap(px(10.0))
-                    .px(px(14.0))
-                    .py(px(12.0))
-                    .rounded(px(12.0))
-                    .border_1()
-                    .border_color(mono::line())
-                    .child(icon("icons/alert-circle.svg", 16.0, mono::ink()))
-                    .child(row_text("Install did not finish", msg.clone()))
-                    .into_any_element(),
-                _ if agent.installed => {
-                    let v = agent.version.clone().unwrap_or_else(|| version.to_string());
-                    let fresh = phase == VendorPhase::Done;
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(10.0))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(10.0))
-                                .px(px(14.0))
-                                .py(px(12.0))
-                                .rounded(px(12.0))
-                                .border_1()
-                                .border_color(mono::line())
-                                .child(icon("icons/check.svg", 16.0, mono::ink()))
-                                .child(row_text(
-                                    format!("DisplayLink Manager {v} is installed"),
-                                    if agent.running {
-                                        "The DisplayLink agent is running."
-                                    } else {
-                                        "The DisplayLink agent is not running yet."
-                                    },
-                                ))
-                                .when(!agent.running, |d| {
-                                    d.child(
-                                        mono::pill("setup-start-agent", "Start agent", true)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                let _ = neolink_core::agent::start();
-                                                neolink_core::agent::invalidate();
-                                                this.state.refresh();
-                                                cx.notify();
-                                            })),
+                    .child(line(
+                        "Download",
+                        0,
+                        (rank == 0).then(|| format!("{} of {}", mib(*done), mib(*total))),
+                    ))
+                    .when(rank == 0, |d| {
+                        d.child(div().pl(px(28.0)).child(ui::meter(ratio, mono::ink())))
+                    })
+                    .child(line("Verify checksum", 1, None))
+                    .child(line("Unpack", 2, None))
+                    .child(line(
+                        "Install",
+                        3,
+                        (rank == 3).then(|| "Waiting for administrator approval".to_string()),
+                    ))
+                    .into_any_element()
+            }
+            VendorPhase::Failed(msg) => div()
+                .flex()
+                .items_start()
+                .gap(px(10.0))
+                .px(px(14.0))
+                .py(px(12.0))
+                .rounded(px(12.0))
+                .border_1()
+                .border_color(mono::line())
+                .child(icon("icons/alert-circle.svg", 16.0, mono::ink()))
+                .child(row_text("Install did not finish", msg.clone()))
+                .into_any_element(),
+            _ if agent.installed => {
+                let v = agent.version.clone().unwrap_or_else(|| version.to_string());
+                let fresh = phase == VendorPhase::Done;
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.0))
+                            .px(px(14.0))
+                            .py(px(12.0))
+                            .rounded(px(12.0))
+                            .border_1()
+                            .border_color(mono::line())
+                            .child(icon("icons/check.svg", 16.0, mono::ink()))
+                            .child(row_text(
+                                format!("DisplayLink Manager {v} is installed"),
+                                if agent.running {
+                                    "The DisplayLink agent is running."
+                                } else {
+                                    "The DisplayLink agent is not running yet."
+                                },
+                            ))
+                            .when(!agent.running, |d| {
+                                d.child(
+                                    ui::button(
+                                        "setup-start-agent",
+                                        "Start agent",
+                                        ui::ButtonKind::Secondary,
+                                        true,
                                     )
-                                }),
-                        )
-                        .when(fresh, |d| {
-                            d.child(
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            let _ = neolink_core::agent::start();
+                                            neolink_core::agent::invalidate();
+                                            this.state.refresh();
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                            }),
+                    )
+                    .when(fresh, |d| {
+                        d.child(
                             div()
                                 .flex()
                                 .items_center()
@@ -780,23 +668,29 @@ impl crate::Neolink {
                                              System Settings › Privacy & Security.",
                                         ),
                                 )
-                                .child(mono::pill("setup-open-privacy", "Open", false).on_click(
-                                    |_, _, _| open_settings_pane("General"),
-                                )),
+                                .child(
+                                    ui::button(
+                                        "setup-open-privacy",
+                                        "Open",
+                                        ui::ButtonKind::Secondary,
+                                        true,
+                                    )
+                                    .on_click(|_, _, _| open_settings_pane("General")),
+                                ),
                         )
-                        })
-                        .into_any_element()
-                }
-                _ => div()
-                    .text_size(px(12.0))
-                    .line_height(px(18.0))
-                    .text_color(mono::faint())
-                    .child(
-                        "Only needed for DisplayLink docks and adapters. macOS will ask for your \
+                    })
+                    .into_any_element()
+            }
+            _ => div()
+                .text_size(px(12.0))
+                .line_height(px(18.0))
+                .text_color(mono::faint())
+                .child(
+                    "Only needed for DisplayLink docks and adapters. macOS will ask for your \
                      administrator password before installing.",
-                    )
-                    .into_any_element(),
-            };
+                )
+                .into_any_element(),
+        };
 
         div()
             .flex()
@@ -830,7 +724,7 @@ impl crate::Neolink {
             well_row(first).child(row_text(title, detail)).child(if ok {
                 granted().into_any_element()
             } else {
-                mono::pill(id, "Allow…", true)
+                ui::button(id, "Allow", ui::ButtonKind::Secondary, true)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         act();
                         this.state.status = "Waiting for permission in System Settings".into();
@@ -905,7 +799,7 @@ impl crate::Neolink {
                         well_row(true)
                             .child(row_text("Open at login", "Start Neolink when you sign in."))
                             .child(
-                                mono::toggle("setup-login", self.state.launch_at_login).on_click(
+                                ui::toggle("setup-login", self.state.launch_at_login).on_click(
                                     cx.listener(|this, _, _, cx| {
                                         this.state.toggle_login_item();
                                         cx.notify();
@@ -953,7 +847,7 @@ impl crate::Neolink {
         value: Option<bool>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        mono::pill(id, label, self.light_theme == value).on_click(cx.listener(
+        ui::segment(id, label, self.light_theme == value).on_click(cx.listener(
             move |this, _, _, cx| {
                 this.light_theme = value;
                 crate::save_theme_preference(value);
