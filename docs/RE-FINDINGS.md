@@ -75,6 +75,34 @@ macOS 27.0.1 by `objc_getClass` + `method_copy`:
 Verified end-to-end from Rust: a display appeared in `CGGetOnlineDisplayList`
 and stayed online. **This is the whole engine** for a non-USB virtual display.
 
+Two descriptor rules are load-bearing and were found by bisection, because
+neither produces an error:
+
+- `setMaxPixelsWide/High` must be **strictly larger** than every mode. At
+  exactly the widest mode the object is created and `applySettings:` returns
+  `YES`, but WindowServer never publishes it: `displayID` is set, the id never
+  appears in `CGGetOnlineDisplayList`, `CGDisplayCopyDisplayMode` returns
+  `NULL`, and it is still absent after 10 s. `+1` is enough; so the whole
+  advertised set is folded into `maxPixels` first (2x for HiDPI) and then
+  incremented.
+- Modes whose **width** is exactly 3840, 4096 or 7680 never enumerate, at any
+  height, while 3839/3841/3850/4000/4095/5120/11520 all do; height 3840 is
+  fine. Bisected on macOS 27.0.1, deterministic (3/3 each way). Growing
+  `maxPixelsWide` by 1/2/4/16/64 does not help, so this is independent of the
+  headroom rule above and has no known cure beyond avoiding those widths in
+  the advertised set. Open, unresolved, not blocking: `suggested_modes()` still
+  leads with 3840x2160 and therefore needs to pick a nearby width.
+- `CGVirtualDisplay` initialisation is a session-wide resource. Repeated
+  create/destroy cycles in one login session eventually return `nil` from
+  `initWithDescriptor:` for *every* size, and a fresh `WindowServer` is the only
+  way back. So a "display was created but never enumerated" failure right after
+  a long debugging session is usually the session being tired, not the new code.
+
+Rates are chosen by CoreGraphics mode id (`CGConfigureDisplayWithDisplayMode`)
+even for a display we own; it keeps the published list intact. Re-publishing
+`applySettings:` instead makes WindowServer re-pick the first mode at that size,
+which is why rotation/HiDPI changes re-select the rate in effect afterwards.
+
 ## Private/undocumented but load-bearing
 
 - `CoreDisplay_DisplayCreateInfoDictionary` → localised `DisplayProductName`

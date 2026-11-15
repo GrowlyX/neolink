@@ -485,10 +485,15 @@ fn main() {
                                     name: "Demo Display".into(),
                                     ..Default::default()
                                 };
-                                let Some(created) = this.state.add_virtual(cfg).ok() else {
-                                    cx.notify();
-                                    return;
+                                let created = match this.state.add_virtual(cfg) {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        eprintln!("demo: add_virtual failed: {e}");
+                                        cx.notify();
+                                        return;
+                                    }
                                 };
+                                eprintln!("demo: created index {created}");
                                 if std::env::var("NEOLINK_DEMO").as_deref() == Ok("2") {
                                     // Exercise every action path so a headless run can be
                                     // verified without Accessibility permission.

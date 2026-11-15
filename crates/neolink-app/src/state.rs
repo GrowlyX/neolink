@@ -444,30 +444,49 @@ impl AppState {
         Ok(())
     }
 
+    /// Switch to one of the display's advertised modes.
+    ///
+    /// The mode is selected through CoreGraphics even for a display we own: the virtual display
+    /// publishes a whole list and CoreGraphics picks from it, so selecting by mode id keeps the
+    /// other sizes and rates on offer. Rewriting the settings object here instead would shrink the
+    /// published list to the one chosen mode, which also empties the mode and rate pickers.
     pub fn set_mode(&mut self, index: usize, mode_id: i32) -> Result<()> {
         let Some(item) = self.items.get(index).cloned() else {
             return Ok(());
         };
 
-        // Virtual displays get their modes from us, so a change means rewriting the settings
-        // object rather than picking a CoreGraphics mode id.
-        if let (Some(cfg), Some(m)) = (
-            item.virtual_cfg.clone(),
-            item.modes.iter().find(|m| m.id == mode_id).cloned(),
-        ) {
-            // Keep the rate the user picked; only the size changes.
-            let mut next = cfg.clone();
-            next.modes = vec![VirtualMode::with_refresh(m.width, m.height, m.refresh)];
-            return self.reconfigure_virtual(index, next);
-        }
-
-        if let Some(d) = &item.cg {
-            let changes = vec![displays::Change {
-                id: d.id,
-                mode_id: Some(mode_id),
-                ..Default::default()
-            }];
-            displays::apply(&changes, true)?;
+        match &item.cg {
+            Some(d) => {
+                // The inspector hands back one of `item.modes`, which for a display we own is a
+                // positional id. Resolve the timing to a real CoreGraphics mode id.
+                let wanted = item.modes.iter().find(|m| m.id == mode_id).cloned();
+                let mode = wanted
+                    .as_ref()
+                    .and_then(|m| self.selectable_mode(index, m.width, m.height, m.hz()))
+                    .or_else(|| displays::modes(d.id).into_iter().find(|m| m.id == mode_id));
+                let Some(mode) = mode else {
+                    return Err(anyhow!("{} has no selectable mode {}", item.name, mode_id));
+                };
+                let changes = vec![displays::Change {
+                    id: d.id,
+                    mode_id: Some(mode.id),
+                    ..Default::default()
+                }];
+                displays::apply(&changes, true)?;
+            }
+            None => {
+                // A display we own that WindowServer has not published yet has no id to select
+                // through, so fall back to republishing its settings with only that mode.
+                let Some(cfg) = item.virtual_cfg.clone() else {
+                    return Ok(());
+                };
+                let Some(m) = item.modes.iter().find(|m| m.id == mode_id).cloned() else {
+                    return Ok(());
+                };
+                let mut next = cfg;
+                next.modes = vec![VirtualMode::with_refresh(m.width, m.height, m.refresh)];
+                return self.reconfigure_virtual(index, next);
+            }
         }
         self.reassert_virtual(index)?;
         self.refresh();
@@ -479,18 +498,51 @@ impl AppState {
     /// The list comes from the display's own modes, never from a fixed set, so a rate is only
     /// offered when the hardware (or the virtual mode list) really has it.
     pub fn rates(&self, index: usize) -> Vec<u32> {
-        let Some(item) = self.items.get(index) else {
-            return Vec::new();
-        };
-        let mut out: Vec<u32> = item
-            .modes
-            .iter()
-            .filter(|m| m.width == item.width && m.height == item.height && m.refresh > 0.0)
-            .map(Mode::hz)
+        let mut out: Vec<u32> = self
+            .modes_at_size(index)
+            .into_iter()
+            .filter(|m| m.refresh > 0.0)
+            .map(|m| m.hz())
             .collect();
         out.sort_unstable();
         out.dedup();
         out
+    }
+
+    /// The display's own modes for the size it is showing right now.
+    ///
+    /// CoreGraphics is preferred because it reports rotated timings and real mode ids; the item's
+    /// own list is only a fallback for a display WindowServer has not published yet. Rotation
+    /// swaps the axes in the live list but not in the saved one, which is why the size is taken
+    /// from the live display rather than from the item.
+    fn modes_at_size(&self, index: usize) -> Vec<Mode> {
+        let Some(item) = self.items.get(index) else {
+            return Vec::new();
+        };
+        if let Some(d) = &item.cg {
+            return displays::modes(d.id)
+                .into_iter()
+                .filter(|m| m.width == d.width && m.height == d.height)
+                .collect();
+        }
+        item.modes
+            .iter()
+            .filter(|m| m.width == item.width && m.height == item.height)
+            .cloned()
+            .collect()
+    }
+
+    /// The usable mode to select for `width`x`height` at `hz`.
+    ///
+    /// Only a CoreGraphics mode id can be handed to `CGConfigureDisplayWithDisplayMode`, and a
+    /// virtual display's own modes are numbered by position, so the id has to be resolved against
+    /// the live list by timing rather than reused from the item.
+    fn selectable_mode(&self, index: usize, width: u32, height: u32, hz: u32) -> Option<Mode> {
+        let item = self.items.get(index)?;
+        let d = item.cg.as_ref()?;
+        displays::modes(d.id)
+            .into_iter()
+            .find(|m| m.width == width && m.height == height && m.hz() == hz)
     }
 
     /// The rate currently in effect, in Hz.
@@ -510,12 +562,7 @@ impl AppState {
         let Some(item) = self.items.get(index).cloned() else {
             return Ok(());
         };
-        let Some(mode) = item
-            .modes
-            .iter()
-            .find(|m| m.width == item.width && m.height == item.height && m.hz() == hz)
-            .cloned()
-        else {
+        if !self.rates(index).contains(&hz) {
             return Err(anyhow!(
                 "{} does not offer {} Hz at {}×{}",
                 item.name,
@@ -523,25 +570,40 @@ impl AppState {
                 item.width,
                 item.height
             ));
-        };
-
-        if let Some(cfg) = item.virtual_cfg.clone() {
-            let mut next = cfg;
-            next.modes = vec![VirtualMode::with_refresh(
-                mode.width,
-                mode.height,
-                mode.refresh,
-            )];
-            return self.reconfigure_virtual(index, next);
         }
 
-        if let Some(d) = &item.cg {
-            let changes = vec![displays::Change {
-                id: d.id,
-                mode_id: Some(mode.id),
-                ..Default::default()
-            }];
-            displays::apply(&changes, true)?;
+        match &item.cg {
+            Some(d) => {
+                let Some(mode) = self.selectable_mode(index, d.width, d.height, hz) else {
+                    return Err(anyhow!("{} has no selectable {} Hz mode", item.name, hz));
+                };
+                let changes = vec![displays::Change {
+                    id: d.id,
+                    mode_id: Some(mode.id),
+                    ..Default::default()
+                }];
+                displays::apply(&changes, true)?;
+            }
+            None => {
+                let Some(cfg) = item.virtual_cfg.clone() else {
+                    return Ok(());
+                };
+                let Some(mode) = item
+                    .modes
+                    .iter()
+                    .find(|m| m.width == item.width && m.height == item.height && m.hz() == hz)
+                    .cloned()
+                else {
+                    return Err(anyhow!("{} does not offer {} Hz", item.name, hz));
+                };
+                let mut next = cfg;
+                next.modes = vec![VirtualMode::with_refresh(
+                    mode.width,
+                    mode.height,
+                    mode.refresh,
+                )];
+                return self.reconfigure_virtual(index, next);
+            }
         }
         self.reassert_virtual(index)?;
         self.refresh();
@@ -559,16 +621,40 @@ impl AppState {
     }
 
     /// Rebuild a virtual display's settings in place (no flicker, same display id).
+    ///
+    /// Re-publishing the settings makes the WindowServer re-pick a mode, which drops back to the
+    /// first one at the display's size. Rotation and HiDPI changes therefore lose the chosen rate,
+    /// so the rate in effect is re-selected afterwards whenever the new mode list still offers it.
     pub fn reconfigure_virtual(&mut self, index: usize, cfg: VirtualDisplayConfig) -> Result<()> {
         let Some(item) = self.items.get(index).cloned() else {
             return Ok(());
         };
+        let wanted = item.cg.as_ref().and_then(|d| d.mode).map(|m| m.hz());
         let Some(o) = self.owned.get_mut(&item.uuid) else {
             return Ok(());
         };
         o.vd.reconfigure(&cfg)?;
         o.cfg = cfg.clone();
         self.refresh();
+
+        // The size can have changed (rotation swaps the axes), so match against what the display
+        // is showing now, not what it was showing before the call.
+        let now = self.items.get(index).and_then(|i| i.cg.clone());
+        if let (Some(hz), Some(d)) = (wanted, now) {
+            let mode = displays::modes(d.id)
+                .into_iter()
+                .find(|m| m.width == d.width && m.height == d.height && m.hz() == hz);
+            if let Some(mode) = mode {
+                let changes = vec![displays::Change {
+                    id: d.id,
+                    mode_id: Some(mode.id),
+                    ..Default::default()
+                }];
+                // A re-select is best-effort: the settings themselves already applied.
+                let _ = displays::apply(&changes, true);
+                self.refresh();
+            }
+        }
         Ok(())
     }
 

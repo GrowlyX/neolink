@@ -20,6 +20,7 @@ attached while the USB half was written, so the transport is RE-derived and
 | Login-window agent | `neolinkctl loginscreen on` installs a `LoginWindow` agent modelled on the vendor's `LoginScreenExt.pkg` (one admin prompt) |
 | Bundling | `scripts/bundle.sh` builds a universal, ad-hoc signed `.app` with icon and `Info.plist`; optional LaunchAgent for launch-at-login |
 | Screen capture | `displays::grab` reads a display through `CGDisplayCreateImage` and hands `Transport::frame` a strided BGRA buffer |
+| Refresh-rate selection | The inspector lists the rates the display's own mode list advertises at its current size (never a fixed set) and applies the pick by CoreGraphics mode id, so the whole advertised list survives the change. The choice is stored per UUID in the profile and only restored when the saved size still offers it; mode, HiDPI and rotation re-select the rate in effect after their `applySettings:` call |
 
 ## Missing or partial
 
@@ -38,7 +39,7 @@ attached while the USB half was written, so the transport is RE-derived and
 
 ## Test coverage
 
-89 unit tests cover the DL3 header/flags/rectangle/checksum rules, EDID
+91 unit tests cover the DL3 header/flags/rectangle/checksum rules, EDID
 validation plus the per-dock derivation, HDCP attribute decoding, the SPKG
 container, fragment splice and frame table against synthesised and all four real
 packs, profile mirror round-trip and tidy, the vendor pin/login-item helpers, and
@@ -49,7 +50,8 @@ that every dirty tile is covered by a returned rect), the H.264 path (codec
 parsing, SPS/PPS/IDR ordering, a VideoToolbox encode→decode round-trip,
 flat-rect size reduction, session-pool reuse and LRU retirement, odd/1x1 rect padding, and that a compressed
 payload — not BGRA — is what gets fragmented), and the refresh preference
-(round-trip, old profiles, restore only at a matching size).
+(round-trip, old profiles, restore only at a matching size), and the
+`maxPixels` headroom rule.
 
 Manual checks this session: the universal bundle from `scripts/bundle.sh
 --release` codesigns, launches and stays up with its window rendered; all four

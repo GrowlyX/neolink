@@ -114,7 +114,7 @@ impl VirtualDisplay {
             .map(|m| m.height.max(m.width))
             .max()
             .unwrap_or(1080);
-        let max_pixels = if cfg.hidpi { 2 } else { 1 };
+        let (max_w, max_h) = max_pixels(widest, highest, cfg.hidpi);
 
         unsafe {
             let desc = alloc_init(class(c"CGVirtualDisplayDescriptor")?);
@@ -130,8 +130,8 @@ impl VirtualDisplay {
                 width: (widest as f64 / 96.0) * 25.4,
                 height: (highest as f64 / 96.0) * 25.4,
             }];
-            let _: () = msg_send![desc, setMaxPixelsWide: widest * max_pixels];
-            let _: () = msg_send![desc, setMaxPixelsHigh: highest * max_pixels];
+            let _: () = msg_send![desc, setMaxPixelsWide: max_w];
+            let _: () = msg_send![desc, setMaxPixelsHigh: max_h];
             let _: () = msg_send![desc, setWhitePoint: CGPoint { x: 0.3127, y: 0.3290 }];
             let _: () = msg_send![desc, setRedPrimary: CGPoint { x: 0.64, y: 0.33 }];
             let _: () = msg_send![desc, setGreenPrimary: CGPoint { x: 0.30, y: 0.60 }];
@@ -232,7 +232,37 @@ unsafe fn build_settings(
     Ok(settings)
 }
 
+/// The descriptor's `maxPixels` for a mode set.
+///
+/// It has to be *strictly* larger than every mode, and that is load-bearing: at exactly the mode
+/// size the display is created and `applySettings:` reports success, but WindowServer never
+/// publishes it, so it never appears in `CGGetOnlineDisplayList`. HiDPI needs the 2x backing store
+/// counted here, which is why the extra pixel is added after the doubling.
+fn max_pixels(widest: u32, highest: u32, hidpi: bool) -> (u32, u32) {
+    let scale = if hidpi { 2 } else { 1 };
+    (widest * scale + 1, highest * scale + 1)
+}
+
 /// True when this macOS build exposes the private display classes.
 pub fn is_available() -> bool {
     class(c"CGVirtualDisplay").is_ok() && class(c"CGVirtualDisplayDescriptor").is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn max_pixels_is_always_strictly_larger_than_the_mode() {
+        // Equal is the failure case: the display never enumerates.
+        assert_eq!(max_pixels(1920, 1080, false), (1921, 1081));
+        assert_eq!(max_pixels(1920, 1080, true), (3841, 2161));
+    }
+
+    #[test]
+    fn max_pixels_covers_the_hidpi_backing_store() {
+        // A 4K HiDPI mode needs a 7680x4320 backing store, so maxPixels must exceed that.
+        let (w, h) = max_pixels(3840, 2160, true);
+        assert!(w > 3840 * 2 && h > 2160 * 2);
+    }
 }
