@@ -45,7 +45,7 @@ fn usage() -> ! {
          \x20 neolinkctl edid-write F     write an EDID block to the dock\n\
          \x20 neolinkctl hdcp              report protection state / HDCP 2.2\n\
          \x20 neolinkctl agent start|stop|restart\n\
-         \x20 neolinkctl vendor status|cache|fetch|expand|install|provision|packs|purge\n\
+         \x20 neolinkctl vendor status|cache|fetch|download|expand|install|provision|packs|purge\n\
          \x20 neolinkctl pack F            parse a vendor .spkg and list its frames\n\
          \x20 neolinkctl pack F --out D   write F's firmware image to D\n\
          \x20 neolinkctl flash F [--force]  DFU-flash a .spkg/.fullrom to the dock\n\
@@ -97,6 +97,7 @@ fn vendor_cmd(action: Option<&str>) -> Result<()> {
                 s.installed_version.as_deref().unwrap_or("-")
             );
             println!("package cached:   {}", s.package_cached);
+            println!("downloaded:       {}", s.downloaded());
             println!("expanded payload: {}", s.expanded);
             println!(
                 "cache size:       {:.1} MiB",
@@ -112,6 +113,15 @@ fn vendor_cmd(action: Option<&str>) -> Result<()> {
                 path.display(),
                 std::fs::metadata(&path)?.len() as f64 / 1048576.0
             )
+        }
+        // Download + verify + expand is the whole of what Neolink itself needs: no admin prompt
+        // and no vendor agent. `install` is the optional extra for the vendor's dock controls.
+        Some("download") => {
+            println!("{}", vendor::expand(&mut progress)?.display());
+            println!(
+                "downloaded DisplayLink Manager {} (not installed)",
+                vendor::VERSION
+            );
         }
         Some("expand") => println!("{}", vendor::expand(&mut progress)?.display()),
         Some("install") => {
@@ -455,6 +465,10 @@ fn main() -> Result<()> {
             println!(
                 "vendor XPC reachable:      {}",
                 neolink_core::agent::reachable()
+            );
+            println!(
+                "vendor package downloaded: {}",
+                neolink_core::vendor::downloaded()
             );
         }
         Some(_) => usage(),

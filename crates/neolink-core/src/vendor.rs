@@ -51,6 +51,20 @@ pub struct Status {
     pub cache_bytes: u64,
 }
 
+impl Status {
+    /// The package is on disk and verified, so everything Neolink does with vendor data can run
+    /// without installing or starting the vendor agent. `install` is only needed to hand the dock
+    /// to Synaptics' own driver.
+    pub fn downloaded(&self) -> bool {
+        self.package_cached || self.expanded
+    }
+
+    /// Installed *and* usable: an installed app is what makes the vendor XPC service available.
+    pub fn installed(&self) -> bool {
+        self.installed_version.is_some()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Paths {
     pub dir: PathBuf,
@@ -83,6 +97,15 @@ fn dir_size(dir: &Path) -> u64 {
             _ => e.metadata().map(|m| m.len()).unwrap_or(0),
         })
         .sum()
+}
+
+/// Just the cheap half of [`status`]: is the pinned package on disk? Used on the UI tick, where
+/// the recursive `cache_bytes` walk would be wasted work.
+pub fn downloaded() -> bool {
+    let Ok(p) = paths() else {
+        return false;
+    };
+    p.package.is_file() || p.expanded.join("Distribution").is_file()
 }
 
 pub fn status() -> Status {
@@ -323,6 +346,45 @@ mod tests {
         assert!(p.dir.ends_with("Neolink/vendor/17.1.56"));
         assert!(p.package.ends_with("DisplayLinkManager.pkg"));
         assert!(p.expanded.ends_with("expanded"));
+    }
+
+    #[test]
+    fn downloaded_is_what_neolink_needs_and_needs_no_install() {
+        // An empty cache is neither downloaded nor installed.
+        let empty = Status::default();
+        assert!(!empty.downloaded());
+        assert!(!empty.installed());
+
+        // The package alone is enough: everything Neolink reads itself (per-dock EDID and
+        // firmware packs) comes out of this copy, with no admin prompt and no vendor agent.
+        let cached = Status {
+            package_cached: true,
+            ..Status::default()
+        };
+        assert!(cached.downloaded());
+        assert!(!cached.installed());
+
+        // An expanded payload counts too, even if the original package was cleaned up.
+        let expanded = Status {
+            expanded: true,
+            ..Status::default()
+        };
+        assert!(expanded.downloaded());
+
+        // Only an installed app makes the vendor XPC service available, which is what the
+        // brightness/contrast/flip/enable controls need.
+        let installed = Status {
+            installed_version: Some(VERSION.into()),
+            ..Status::default()
+        };
+        assert!(installed.installed());
+    }
+
+    #[test]
+    fn downloaded_matches_the_cache_on_disk() {
+        // `downloaded()` must agree with `status()`, both of which read the same paths. This is
+        // the cheap predicate the UI tick uses, so a disagreement would make the button lie.
+        assert_eq!(downloaded(), status().downloaded());
     }
 
     #[test]

@@ -179,6 +179,8 @@ impl Neolink {
                 (None, true) => "DisplayLink".into(),
                 (None, false) => "DisplayLink stopped".into(),
             }
+        } else if self.state.vendor_downloaded {
+            "DisplayLink package".into()
         } else {
             "No DisplayLink driver".into()
         }
@@ -233,9 +235,11 @@ impl Neolink {
                 ui::button(
                     "btn-install",
                     if busy {
-                        "Installing…"
+                        "Downloading…"
                     } else if agent.installed {
                         "Reinstall DisplayLink"
+                    } else if self.state.vendor_downloaded {
+                        "Install DisplayLink"
                     } else {
                         "Get DisplayLink"
                     },
@@ -248,7 +252,14 @@ impl Neolink {
                 )
                 .when(!busy, |el| {
                     el.on_click(cx.listener(|this, _, _, cx| {
-                        this.state.provision();
+                        // Downloading needs no administrator password, so it is the default.
+                        // The install (which does prompt) is the explicit second press, or the
+                        // dedicated button in Settings.
+                        if this.state.vendor_downloaded && !this.state.agent.installed {
+                            this.state.provision();
+                        } else {
+                            this.state.download_vendor();
+                        }
                         cx.notify();
                     }))
                 }),
@@ -336,6 +347,7 @@ impl Neolink {
         let accessibility_ok = accessibility_allowed();
         let screen_ok = self.state.capture_allowed;
         let agent = &self.state.agent;
+        let busy = self.state.busy();
         let row = |title: &'static str, detail: String| {
             div()
                 .flex()
@@ -441,18 +453,47 @@ impl Neolink {
                             self.displaylink_label(),
                             if agent.running { "is running." } else { "is installed." }
                         )
+                    } else if self.state.vendor_downloaded {
+                        "Downloaded. Only DisplayLink's own dock controls need it installed."
+                            .into()
                     } else {
-                        "Needed for DisplayLink docks and adapters.".into()
+                        "Not downloaded. Virtual displays work without it.".into()
                     },
                 )
                 .child(ui::badge(
-                    if agent.installed { "Installed" } else { "Not installed" },
+                    if agent.installed {
+                        "Installed"
+                    } else if self.state.vendor_downloaded {
+                        "Downloaded"
+                    } else {
+                        "Not downloaded"
+                    },
                     if agent.installed {
                         ui::BadgeKind::Strong
                     } else {
                         ui::BadgeKind::Neutral
                     },
                 )),
+            )
+            .when(
+                self.state.vendor_downloaded && !agent.installed,
+                |d| {
+                    // Downloading is enough for us; this is the optional admin-prompt step.
+                    d.child(
+                        row(
+                            "Vendor controls",
+                            "Brightness, contrast, flip and enable come from the vendor agent."
+                                .into(),
+                        )
+                        .child(
+                            ui::button("btn-install-vendor", "Install", ui::ButtonKind::Secondary, !busy)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.state.provision();
+                                    cx.notify();
+                                })),
+                        ),
+                    )
+                },
             )
             .child(ui::divider())
             .child(theme::styled(&theme::text::LABEL, "Permissions"))

@@ -87,6 +87,10 @@ pub struct AppState {
     pub dirty: bool,
     /// Cached view of the vendor package cache; refreshed with the desktop.
     pub vendor: vendor::Status,
+    /// The pinned package is on disk (verified on fetch), so the vendor data Neolink reads —
+    /// per-dock EDID packs, resource bundles — is available without installing or starting the
+    /// vendor agent. Anything that talks to the vendor XPC still needs the app installed.
+    pub vendor_downloaded: bool,
     /// Live line from the background installer, if one is running.
     pub vendor_progress: Arc<Mutex<Option<String>>>,
     /// Shared with the worker so it can clear the flag when it finishes.
@@ -111,6 +115,7 @@ impl AppState {
             dragging: None,
             dirty: false,
             vendor: vendor::status(),
+            vendor_downloaded: vendor::downloaded(),
             vendor_progress: Arc::new(Mutex::new(None)),
             vendor_busy: Arc::new(AtomicBool::new(false)),
             vendor_phase: Arc::new(Mutex::new(VendorPhase::Idle)),
@@ -136,6 +141,7 @@ impl AppState {
     /// CoreGraphics pass is not gated on the filesystem walk.
     pub fn refresh_vendor(&mut self) {
         self.vendor = vendor::status();
+        self.vendor_downloaded = self.vendor.downloaded();
         if let Ok(slot) = self.vendor_progress.lock() {
             if let Some(line) = slot.as_ref() {
                 self.status = line.clone();
@@ -146,6 +152,19 @@ impl AppState {
     /// Fetch, verify and install the pinned vendor package, off the UI thread. `installer` prompts
     /// for an admin password on the main queue, so the app must not block while it does.
     pub fn provision(&mut self) {
+        self.acquire_vendor(true);
+    }
+
+    /// Fetch, verify and expand the pinned package without an administrator prompt.
+    ///
+    /// This is all Neolink itself needs: the expanded payload carries the per-dock EDID and
+    /// firmware packs, and nothing here touches the vendor agent or its XPC service. Installing
+    /// is only required to hand the dock to Synaptics' own driver.
+    pub fn download_vendor(&mut self) {
+        self.acquire_vendor(false);
+    }
+
+    fn acquire_vendor(&mut self, install: bool) {
         if self.busy() {
             return;
         }
@@ -187,17 +206,38 @@ impl AppState {
                     *s = Some(text);
                 }
             };
-            let result = vendor::provision(&mut report);
+            let result = if install {
+                vendor::provision(&mut report)
+            } else {
+                vendor::expand(&mut report).map(|_| ())
+            };
             let text = match result {
-                Ok(()) => {
+                Ok(()) if install => {
                     let _ = neolink_core::agent::start();
                     agent::invalidate();
                     set_phase(&phase, VendorPhase::Done);
                     format!("DisplayLink {} installed and started", vendor::VERSION)
                 }
+                Ok(()) => {
+                    // Downloaded and expanded only: no agent start, no admin prompt.
+                    set_phase(&phase, VendorPhase::Done);
+                    format!(
+                        "DisplayLink {} downloaded. Install it later for vendor controls.",
+                        vendor::VERSION
+                    )
+                }
                 Err(e) => {
-                    set_phase(&phase, VendorPhase::Failed(friendly_install_error(&e)));
-                    format!("Install failed: {e}")
+                    let failure = if install {
+                        friendly_install_error(&e)
+                    } else {
+                        friendly_download_error(&e)
+                    };
+                    set_phase(&phase, VendorPhase::Failed(failure));
+                    if install {
+                        format!("Install failed: {e}")
+                    } else {
+                        format!("Download failed: {e}")
+                    }
                 }
             };
             if let Ok(mut s) = slot.lock() {
@@ -835,6 +875,18 @@ pub enum VendorPhase {
 fn set_phase(slot: &Mutex<VendorPhase>, phase: VendorPhase) {
     if let Ok(mut p) = slot.lock() {
         *p = phase;
+    }
+}
+
+/// Download-only failures never involve a password prompt, so the install wording would mislead.
+fn friendly_download_error(e: &anyhow::Error) -> String {
+    let text = format!("{e}");
+    if text.contains("checksum mismatch") {
+        "The download did not match the pinned checksum, so it was discarded.".into()
+    } else if text.contains("download failed") || text.contains("curl") {
+        "Could not reach synaptics.com. Check your connection and try again.".into()
+    } else {
+        text
     }
 }
 

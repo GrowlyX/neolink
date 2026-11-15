@@ -8,7 +8,7 @@ attached while the USB half was written, so the transport is RE-derived and
 
 | Area | Notes |
 | --- | --- |
-| Vendor package acquisition | Pinned URL + SHA-256, cached under Application Support, expanded on demand, installed with `installer` in one admin prompt. No Synaptics bytes are redistributed |
+| Vendor package acquisition | Pinned URL + SHA-256, cached under Application Support, expanded on demand with no admin prompt, and installed with `installer` only when you ask. Downloading alone is sufficient for everything Neolink does itself, including the per-dock EDID/firmware packs; installing is only needed for the vendor's own dock controls. No Synaptics bytes are redistributed |
 | Virtual display creation | `CGVirtualDisplay` + `applySettings:`, the same object the vendor agent holds per dock |
 | Mode list, HiDPI, rotation | Re-applied in place; re-asserted after every CG reconfiguration |
 | Arrangement + persistence | UUID-keyed profile, tidy, atomic save |
