@@ -26,7 +26,7 @@ impl crate::Neolink {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_FAINT)
+                            .text_color(theme::text_faint())
                             .child("DISPLAYS"),
                     )
                     .child(ui::chip().child(format!("{}", items.len()))),
@@ -48,18 +48,18 @@ impl crate::Neolink {
                     .p_2()
                     .rounded(px(10.0))
                     .bg(if selected {
-                        theme::SHEEN
+                        theme::sheen()
                     } else {
                         theme::TRANSPARENT
                     })
                     .border_1()
                     .border_color(if selected {
-                        theme::HAIRLINE
+                        theme::hairline()
                     } else {
                         theme::TRANSPARENT
                     })
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme::GLASS_SOFT))
+                    .hover(|s| s.bg(theme::glass_soft()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.state.selected = Some(index);
                         cx.notify();
@@ -75,7 +75,7 @@ impl crate::Neolink {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(theme::TEXT)
+                                    .text_color(theme::text())
                                     .whitespace_nowrap()
                                     .truncate()
                                     .child(name),
@@ -83,7 +83,7 @@ impl crate::Neolink {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme::TEXT_FAINT)
+                                    .text_color(theme::text_faint())
                                     .whitespace_nowrap()
                                     .truncate()
                                     .child(sub),
@@ -93,7 +93,7 @@ impl crate::Neolink {
                     .child(ui::dot(if enabled {
                         theme::OK
                     } else {
-                        theme::TEXT_FAINT
+                        theme::text_faint()
                     })),
             );
         }

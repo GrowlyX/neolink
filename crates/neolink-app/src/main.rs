@@ -10,15 +10,20 @@ mod state;
 mod theme;
 mod ui;
 
+use std::borrow::Cow;
+
 use gpui::AsyncApp;
 use gpui::{
-    div, linear_color_stop, linear_gradient, point, prelude::*, px, size, App, Application, Bounds,
-    Context, Window, WindowBackgroundAppearance, WindowBounds, WindowOptions,
+    div, point, prelude::*, px, size, svg, App, Application, AssetSource, Bounds, Context,
+    SharedString, Window, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowOptions,
 };
 use state::AppState;
 
 struct Neolink {
     state: AppState,
+    settings_open: bool,
+    light_theme: Option<bool>,
     /// Active drag on the arrangement canvas, if any.
     drag_anchor: Option<arrangement::Drag>,
     notify_rx: Option<std::sync::mpsc::Receiver<neolink_core::agent::Notification>>,
@@ -33,6 +38,8 @@ impl Neolink {
         });
         Self {
             state: AppState::new(),
+            settings_open: false,
+            light_theme: load_theme_preference(),
             drag_anchor: None,
             notify_rx: subscribed.then_some(rx),
         }
@@ -55,20 +62,19 @@ impl Neolink {
 }
 
 impl Render for Neolink {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        theme::set_light_mode(self.light_theme.unwrap_or(matches!(
+            window.appearance(),
+            WindowAppearance::Light | WindowAppearance::VibrantLight
+        )));
         div()
             .flex()
             .flex_col()
             .size_full()
-            .bg(linear_gradient(
-                160.0,
-                linear_color_stop(theme::with_alpha(theme::BASE_TOP, 0.74), 0.0),
-                linear_color_stop(theme::with_alpha(theme::BASE_BOTTOM, 0.80), 1.0),
-            ))
-            .text_color(theme::TEXT)
-            .font_family(".SystemUIFont")
+            .bg(theme::base_top())
+            .text_color(theme::text())
+            .font_family("Geist")
             .relative()
-            .child(ambient_glow())
             .child(self.header(cx))
             .child(
                 div()
@@ -76,45 +82,46 @@ impl Render for Neolink {
                     .flex_row()
                     .flex_1()
                     .min_h(px(0.0))
-                    .gap_3()
-                    .px_3()
-                    .pb_3()
-                    .child(
-                        div()
-                            .w(px(268.0))
-                            .flex_none()
-                            .h_full()
-                            .child(self.device_list(cx)),
-                    )
+                    .gap(px(20.0))
+                    .px(px(28.0))
+                    .pb(px(20.0))
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
                             .h_full()
-                            .child(self.canvas(cx)),
+                            .flex()
+                            .flex_col()
+                            .gap(px(14.0))
+                            .child(self.workspace_header(cx))
+                            .child(self.canvas(cx))
+                            .child(self.workspace_actions(cx)),
                     )
                     .child(
                         div()
-                            .w(px(300.0))
+                            .w(px(340.0))
                             .flex_none()
                             .h_full()
                             .child(self.inspector(cx)),
                     ),
             )
             .child(self.status_bar())
+            .when(self.settings_open, |root| {
+                root.child(self.settings_panel(cx))
+            })
     }
 }
 
 impl Neolink {
     fn status_bar(&self) -> impl IntoElement {
         div()
-            .h(px(24.0))
-            .px_4()
+            .h(px(38.0))
+            .px(px(28.0))
             .flex()
             .items_center()
-            .gap_2()
-            .text_xs()
-            .text_color(theme::TEXT_FAINT)
+            .gap(px(8.0))
+            .text_size(px(13.0))
+            .text_color(theme::text_faint())
             .child(
                 div()
                     .flex_1()
@@ -123,7 +130,7 @@ impl Neolink {
                     .text_color(if self.state.status.contains("failed") {
                         theme::DANGER
                     } else {
-                        theme::TEXT_FAINT
+                        theme::text_faint()
                     })
                     .child(self.state.status.clone()),
             )
@@ -139,7 +146,7 @@ impl Neolink {
         let status_color = match (agent.installed, agent.running) {
             (true, true) => theme::OK,
             (true, false) => theme::WARN,
-            _ => theme::TEXT_FAINT,
+            _ => theme::text_faint(),
         };
         let status_text = if agent.installed {
             match (&agent.version, agent.running) {
@@ -156,47 +163,32 @@ impl Neolink {
             .flex()
             .flex_row()
             .items_center()
-            .gap_3()
-            .h(px(58.0))
-            .pt(px(10.0))
-            .px_4()
-            .child(div().w(px(56.0)))
-            .child(ui::logo(26.0))
+            .gap(px(12.0))
+            .h(px(72.0))
+            .px(px(28.0))
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("Neolink"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme::TEXT_FAINT)
-                            .child("Display manager"),
-                    ),
+                svg()
+                    .path("logo/neolink-lockup.svg")
+                    .w(px(148.0))
+                    .h(px(25.0)),
             )
             .child(div().flex_1())
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_1p5()
+                    .gap(px(8.0))
+                    .px(px(13.0))
+                    .py(px(7.0))
                     .rounded_full()
-                    .bg(theme::GLASS_SOFT)
+                    .bg(theme::glass_soft())
                     .border_1()
-                    .border_color(theme::HAIRLINE_SOFT)
+                    .border_color(theme::hairline_soft())
                     .child(ui::dot(status_color))
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_DIM)
+                            .text_color(theme::text_dim())
                             .child(status_text),
                     ),
             )
@@ -204,7 +196,7 @@ impl Neolink {
                 div()
                     .flex()
                     .items_center()
-                    .gap_2()
+                    .gap(px(8.0))
                     .child(
                         ui::pill("btn-refresh", "Refresh", false).on_click(cx.listener(
                             |this, _, _, cx| {
@@ -215,66 +207,205 @@ impl Neolink {
                         )),
                     )
                     .child(
-                        ui::pill("btn-login", "At login", self.state.launch_at_login).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.state.toggle_login_item();
+                        div()
+                            .id("settings-button")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(36.0))
+                            .rounded(px(9.0))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::glass_soft()))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.settings_open = !this.settings_open;
                                 cx.notify();
-                            }),
-                        ),
-                    )
-                    .child(
-                        ui::pill(
-                            "btn-install",
-                            if self.state.busy() {
-                                "Installing…"
-                            } else if agent.installed {
-                                "Reinstall DisplayLink"
-                            } else {
-                                "Get DisplayLink"
-                            },
-                            !agent.installed,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.state.provision();
-                            cx.notify();
-                        })),
+                            }))
+                            .child(svg().path("logo/settings.svg").size(px(18.0))),
                     ),
             )
     }
+
+    fn workspace_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div().flex().items_end().h(px(62.0)).child(
+            div().flex().flex_col().gap(px(3.0)).flex_1()
+                .child(div().text_size(px(25.0)).font_weight(gpui::FontWeight::MEDIUM).child("Arrangement"))
+                .child(div().text_size(px(14.0)).text_color(theme::text_dim()).child("Drag a display to where it sits on your desk. The bar marks the main display.")),
+        ).children((self.state.agent.installed && !self.state.agent.running).then(|| {
+            ui::pill("start-agent", "Start agent", false).on_click(cx.listener(|this, _, _, cx| {
+                this.state.status = match neolink_core::agent::start() { Ok(()) => "DisplayLink agent started".into(), Err(e) => format!("{e}") };
+                this.state.refresh();
+                cx.notify();
+            }))
+        })).child(
+            ui::pill("btn-install", if self.state.busy() { "Installing…" } else if self.state.agent.installed { "Reinstall DisplayLink" } else { "Get DisplayLink" }, !self.state.agent.installed)
+                .on_click(cx.listener(|this, _, _, cx| { this.state.provision(); cx.notify(); })),
+        )
+    }
+
+    fn workspace_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let can_save = !self.state.items.is_empty();
+        div()
+            .flex()
+            .items_center()
+            .h(px(36.0))
+            .gap(px(10.0))
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(13.0))
+                    .text_color(theme::text_dim())
+                    .child(if self.state.dirty {
+                        "Unsaved display changes"
+                    } else {
+                        "Everything matches your displays."
+                    }),
+            )
+            .child(
+                ui::pill("save-layout", "Save layout", can_save).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.state.status = match this.state.save() {
+                            Ok(()) => "Layout saved".into(),
+                            Err(e) => format!("Save failed: {e}"),
+                        };
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                ui::pill("add-display", "+ Add virtual display", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        let cfg = neolink_core::virtual_display::VirtualDisplayConfig {
+                            modes: state::suggested_modes(),
+                            hidpi: true,
+                            ..Default::default()
+                        };
+                        if let Err(e) = this.state.add_virtual(cfg) {
+                            this.state.status = format!("Could not create display: {e}");
+                        }
+                        cx.notify();
+                    },
+                )),
+            )
+    }
+
+    fn settings_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let accessibility_ok = accessibility_allowed();
+        div().absolute().top(px(62.0)).right(px(24.0)).w(px(420.0)).p(px(20.0))
+            .flex().flex_col().gap(px(15.0)).rounded(px(14.0)).bg(theme::base_bottom())
+            .border_1().border_color(theme::hairline()).shadow_lg()
+            .child(div().flex().items_center().justify_between()
+                .child(div().text_size(px(18.0)).font_weight(gpui::FontWeight::MEDIUM).child("Settings"))
+                .child(ui::pill("close-settings", "×", false).on_click(cx.listener(|this, _, _, cx| { this.settings_open = false; cx.notify(); }))))
+            .child(ui::divider())
+            .child(div().text_xs().text_color(theme::text_faint()).child("APPEARANCE"))
+            .child(div().flex().items_center().justify_between()
+                .child(div().flex().flex_col().gap(px(3.0)).child(div().text_sm().child("Theme")).child(div().text_xs().text_color(theme::text_faint()).child("Choose the Neolink color theme.")))
+                .child(div().flex().gap(px(4.0)).p(px(3.0)).rounded(px(9.0)).bg(theme::glass_soft())
+                    .child(ui::pill("theme-system", "System", self.light_theme.is_none()).on_click(cx.listener(|this, _, _, cx| { this.light_theme = None; save_theme_preference(None); cx.notify(); })))
+                    .child(ui::pill("theme-dark", "Dark", self.light_theme == Some(false)).on_click(cx.listener(|this, _, _, cx| { this.light_theme = Some(false); save_theme_preference(Some(false)); cx.notify(); })))
+                    .child(ui::pill("theme-light", "Light", self.light_theme == Some(true)).on_click(cx.listener(|this, _, _, cx| { this.light_theme = Some(true); save_theme_preference(Some(true)); cx.notify(); })))
+                )
+            )
+            .child(div().text_xs().text_color(theme::text_faint()).child("LOGIN"))
+            .child(div().flex().items_center().justify_between()
+                .child(div().flex().flex_col().gap(px(3.0)).child(div().text_sm().child("Open on login")).child(div().text_xs().text_color(theme::text_faint()).child("Start Neolink when you sign in.")))
+                .child(ui::toggle("toggle-login", self.state.launch_at_login).on_click(cx.listener(|this, _, _, cx| { this.state.toggle_login_item(); cx.notify(); }))))
+            .child(ui::divider())
+            .child(div().text_xs().text_color(theme::text_faint()).child("PERMISSIONS"))
+            .child(div().flex().items_center().justify_between()
+                .child(div().flex().flex_col().gap(px(3.0)).child(div().text_sm().child("Screen Recording")).child(div().text_xs().text_color(theme::text_faint()).child("Used for future screen previews.")))
+                .child(ui::pill("permission-screen", if self.state.capture_allowed { "Granted" } else { "Open settings" }, self.state.capture_allowed).on_click(cx.listener(|this, _, _, cx| {
+                    if !this.state.capture_allowed { let _ = neolink_core::displays::request_screen_capture(); let _ = std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture").spawn(); }
+                    cx.notify();
+                }))))
+            .child(div().flex().items_center().justify_between()
+                .child(div().flex().flex_col().gap(px(3.0)).child(div().text_sm().child("Accessibility")).child(div().text_xs().text_color(theme::text_faint()).child("Used for future display automation.")))
+                .child(ui::pill("permission-accessibility", if accessibility_ok { "Granted" } else { "Open settings" }, accessibility_ok).on_click(cx.listener(move |_, _, _, _| {
+                    if !accessibility_ok { let _ = std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").spawn(); }
+                }))))
+    }
 }
 
-/// Soft radial-ish accents painted behind the glass panes so the blur has something to pick up.
-fn ambient_glow() -> impl IntoElement {
-    div()
-        .absolute()
-        .inset_0()
-        .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .left(px(-120.0))
-                .top(px(-160.0))
-                .size(px(620.0))
-                .rounded_full()
-                .bg(linear_gradient(
-                    135.0,
-                    linear_color_stop(theme::with_alpha(theme::ACCENT, 0.13), 0.0),
-                    linear_color_stop(theme::with_alpha(theme::ACCENT, 0.0), 1.0),
-                )),
-        )
-        .child(
-            div()
-                .absolute()
-                .right(px(-140.0))
-                .bottom(px(-200.0))
-                .size(px(620.0))
-                .rounded_full()
-                .bg(linear_gradient(
-                    315.0,
-                    linear_color_stop(theme::with_alpha(theme::ACCENT_SOFT, 0.10), 0.0),
-                    linear_color_stop(theme::with_alpha(theme::ACCENT_SOFT, 0.0), 1.0),
-                )),
-        )
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+}
+
+fn accessibility_allowed() -> bool {
+    unsafe { AXIsProcessTrusted() }
+}
+
+fn preference_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(|home| {
+        std::path::PathBuf::from(home)
+            .join("Library/Application Support/Neolink")
+            .join("appearance")
+    })
+}
+
+fn load_theme_preference() -> Option<bool> {
+    let path = preference_path()?;
+    match std::fs::read_to_string(path).ok()?.trim() {
+        "light" => Some(true),
+        "dark" => Some(false),
+        _ => None,
+    }
+}
+
+fn save_theme_preference(theme: Option<bool>) {
+    let Some(path) = preference_path() else {
+        return;
+    };
+    let Some(parent) = path.parent() else { return };
+    if std::fs::create_dir_all(parent).is_ok() {
+        let value = match theme {
+            Some(true) => "light",
+            Some(false) => "dark",
+            None => "system",
+        };
+        let _ = std::fs::write(path, value);
+    }
+}
+
+struct Assets;
+impl AssetSource for Assets {
+    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        let bytes: Option<&'static [u8]> = match path {
+            "logo/neolink-lockup.svg" => Some(include_bytes!("../assets/logo/neolink-lockup.svg")),
+            "logo/settings.svg" => Some(include_bytes!("../assets/logo/settings.svg")),
+            "brands/acer.svg" => Some(include_bytes!("../assets/brands/acer.svg")),
+            "brands/aoc.svg" => Some(include_bytes!("../assets/brands/aoc.svg")),
+            "brands/apple.svg" => Some(include_bytes!("../assets/brands/apple.svg")),
+            "brands/asus.svg" => Some(include_bytes!("../assets/brands/asus.svg")),
+            "brands/benq.svg" => Some(include_bytes!("../assets/brands/benq.svg")),
+            "brands/dell.svg" => Some(include_bytes!("../assets/brands/dell.svg")),
+            "brands/eizo.svg" => Some(include_bytes!("../assets/brands/eizo.svg")),
+            "brands/gigabyte.svg" => Some(include_bytes!("../assets/brands/gigabyte.svg")),
+            "brands/hisense.svg" => Some(include_bytes!("../assets/brands/hisense.svg")),
+            "brands/hp.svg" => Some(include_bytes!("../assets/brands/hp.svg")),
+            "brands/huawei.svg" => Some(include_bytes!("../assets/brands/huawei.svg")),
+            "brands/iiyama.svg" => Some(include_bytes!("../assets/brands/iiyama.svg")),
+            "brands/lenovo.svg" => Some(include_bytes!("../assets/brands/lenovo.svg")),
+            "brands/lg.svg" => Some(include_bytes!("../assets/brands/lg.svg")),
+            "brands/microsoft.svg" => Some(include_bytes!("../assets/brands/microsoft.svg")),
+            "brands/msi.svg" => Some(include_bytes!("../assets/brands/msi.svg")),
+            "brands/nec.svg" => Some(include_bytes!("../assets/brands/nec.svg")),
+            "brands/panasonic.svg" => Some(include_bytes!("../assets/brands/panasonic.svg")),
+            "brands/philips.svg" => Some(include_bytes!("../assets/brands/philips.svg")),
+            "brands/razer.svg" => Some(include_bytes!("../assets/brands/razer.svg")),
+            "brands/samsung.svg" => Some(include_bytes!("../assets/brands/samsung.svg")),
+            "brands/sharp.svg" => Some(include_bytes!("../assets/brands/sharp.svg")),
+            "brands/sony.svg" => Some(include_bytes!("../assets/brands/sony.svg")),
+            "brands/tcl.svg" => Some(include_bytes!("../assets/brands/tcl.svg")),
+            "brands/viewsonic.svg" => Some(include_bytes!("../assets/brands/viewsonic.svg")),
+            "brands/xiaomi.svg" => Some(include_bytes!("../assets/brands/xiaomi.svg")),
+            _ => None,
+        };
+        Ok(bytes.map(|bytes| Cow::Borrowed(bytes)))
+    }
+    fn list(&self, _path: &str) -> gpui::Result<Vec<SharedString>> {
+        Ok(Vec::new())
+    }
 }
 
 fn cfg_clone(
@@ -289,7 +420,13 @@ fn cfg_clone(
 }
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
+    Application::new().with_assets(Assets).run(|cx: &mut App| {
+        let _ = cx.text_system().add_fonts(vec![
+            Cow::Borrowed(include_bytes!("../assets/fonts/Geist-Regular.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/Geist-Medium.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/Geist-SemiBold.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/Geist-Thin.ttf")),
+        ]);
         let bounds = Bounds::centered(None, size(px(1180.0), px(720.0)), cx);
         cx.open_window(
             WindowOptions {
@@ -319,7 +456,7 @@ fn main() {
                                     // With a live notification stream a refresh is only needed for
                                     // structural changes; polling stays as the fallback.
                                     this.state.refresh_vendor();
-                                    if this.notify_rx.is_none() || notified {
+                                    if this.notify_rx.is_none() || notified || this.settings_open {
                                         this.state.refresh();
                                         cx.notify();
                                     }

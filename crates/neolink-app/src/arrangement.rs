@@ -7,7 +7,9 @@
 use crate::theme;
 use crate::ui;
 use gpui::prelude::*;
-use gpui::{div, px, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Window};
+use gpui::{
+    div, px, svg, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Window,
+};
 
 /// Points of desktop space per canvas point, before zoom.
 const CANVAS_PAD: f32 = 28.0;
@@ -47,7 +49,7 @@ impl crate::Neolink {
                     .top(px(12.0))
                     .left(px(16.0))
                     .text_xs()
-                    .text_color(theme::TEXT_FAINT)
+                    .text_color(theme::text_faint())
                     .child("ARRANGEMENT"),
             )
             .child(
@@ -84,7 +86,7 @@ impl crate::Neolink {
             let top = 52.0 + row as f32 * 28.0;
             let mut line = div().absolute().top(px(top)).left(px(16.0)).flex().gap_7();
             for _ in 0..40 {
-                line = line.child(div().size(px(1.0)).bg(theme::HAIRLINE_SOFT));
+                line = line.child(div().size(px(1.0)).bg(theme::hairline_soft()));
             }
             inner = inner.child(line);
         }
@@ -101,6 +103,7 @@ impl crate::Neolink {
             let name = item.name.clone();
             let size_text = item.size_label();
             let is_main = item.main;
+            let brand = ui::brand_logo(&name);
 
             inner = inner.child(
                 div()
@@ -114,12 +117,12 @@ impl crate::Neolink {
                     .bg(if selected {
                         theme::with_alpha(theme::ACCENT, 0.13)
                     } else {
-                        theme::GLASS_SOFT
+                        theme::glass_soft()
                     })
                     .border_1()
-                    .border_color(if selected { swatch } else { theme::HAIRLINE })
+                    .border_color(if selected { swatch } else { theme::hairline() })
                     .cursor_move()
-                    .hover(|s| s.border_color(theme::TEXT_FAINT))
+                    .hover(|s| s.border_color(theme::text_faint()))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, e: &MouseDownEvent, _, cx| {
@@ -189,11 +192,14 @@ impl crate::Neolink {
                                     .flex()
                                     .items_center()
                                     .gap_1()
+                                    .children(brand.map(|path| {
+                                        svg().path(path).w(px(24.0)).h(px(14.0)).flex_none()
+                                    }))
                                     .child(ui::dot(swatch))
                                     .child(
                                         div()
                                             .text_xs()
-                                            .text_color(theme::TEXT)
+                                            .text_color(theme::text())
                                             .whitespace_nowrap()
                                             .truncate()
                                             .child(name),
@@ -202,7 +208,7 @@ impl crate::Neolink {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme::TEXT_FAINT)
+                                    .text_color(theme::text_faint())
                                     .whitespace_nowrap()
                                     .truncate()
                                     .child(size_text),
@@ -232,13 +238,13 @@ impl crate::Neolink {
                     .child(
                         div()
                             .text_sm()
-                            .text_color(theme::TEXT_DIM)
+                            .text_color(theme::text_dim())
                             .child("No displays"),
                     )
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::TEXT_FAINT)
+                            .text_color(theme::text_faint())
                             .child("Attach a dock or add a virtual display"),
                     ),
             );
