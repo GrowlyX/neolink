@@ -95,3 +95,44 @@ and stayed online. **This is the whole engine** for a non-USB virtual display.
 `Contents/Resources/3rd_party_licences.txt` is vendor-supplied; the per-dock
 `.spkg` EDID/firmware blobs ship with the app and are covered by the Synaptics
 EULA. Neolink only *reads* them if present; it never redistributes them.
+
+## The `.spkg` per-dock packs
+
+Four packs ship in `Contents/Resources` (`ella`, `firefly`, `navarro`, `ridge`),
+one per dock family: firmware plus a synthesised EDID/mode set. They are *not*
+redistributable, which is exactly why Neolink fetches the vendor package at
+runtime instead of embedding them (see `crates/neolink-core/src/vendor.rs`).
+
+Container, from the parser at `0x10020a740` and its strings ("Invalid TLV
+Beginning", "Invalid TLV Body", "Invalid Length for FRAGMENTED_SPKG TLV"):
+
+```
+0  "ELLA"
+4  u32 total file size == real length
+8  u16 TLV table offset
+10 u16 TLV table length (<= 0x200000)
+.. records: { u16 index, u16 len, body, 28-byte trailer } on 16-byte boundaries
+.. TLV table: { u16 type, u16 len, body, pad-if-odd }
+.. payload
+```
+
+TLV types the agent maps: `RD` record name, `OW` owner, `RE` revision (8/9 B),
+`RL` release level (1 B), `VE` version (3 B), `DA`/`TI` build date/time, `BD`
+body index, `PT` payload. Records are stored out of order and the `u16 index` is
+the reassembly key; the 20-vs.-20 `PT` body split at offset 0 within each
+fragment line up with the `FRAGMENTED_SPKG` error, i.e. a `PT` fragment continues
+into the next record rather than being self-contained. `Pack::payload()`
+concatenates by index.
+
+The payload is a zlib stream (Apple `compression_decode_buffer` with
+`COMPRESSION_ZLIB` decodes the head), but it is *continued* by later fragments
+after the TLV table, and record trailers are not a plain SHA-224 of the body —
+neither is enforced. Treat that as the remaining unknown; the container itself
+is fully parsed and covered by tests against all four real packs.
+
+## Vendor package pin
+
+URL, size and digest are constants in `vendor.rs`; the hash is checked before
+`pkgutil` ever runs, so a changed or truncated download cannot reach `installer`.
+`installer -pkg … -target /` via `osascript … with administrator privileges`
+keeps signature checks and receipts with macOS instead of reimplementing them.

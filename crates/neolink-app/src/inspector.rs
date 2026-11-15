@@ -75,9 +75,52 @@ impl crate::Neolink {
                 .child(div().text_xs().text_color(theme::TEXT_FAINT).child("DISPLAYLINK"))
                 .child(ui::stat("Brightness", format!("{:.0}%", v.brightness * 100.0)))
                 .child(ui::meter(v.brightness as f32, theme::ACCENT))
+                .child(ui::slider(
+                    gpui::ElementId::Name(format!("bright-{}", item.uuid).into()),
+                    v.brightness as f32,
+                    theme::ACCENT,
+                    cx.listener(move |this, set: &ui::SliderSet, _, cx| {
+                        if let Err(e) = this.state.set_vendor_level(index, "brightness", set.step as f64) {
+                            this.state.status = format!("{e}");
+                        }
+                        cx.notify();
+                    }),
+                ))
                 .child(ui::stat("Contrast", format!("{:.0}%", v.contrast * 100.0)))
                 .child(ui::meter(v.contrast as f32, theme::ACCENT_SOFT))
-                .child(ui::stat("USB", format!("{:04x}:{:04x}", v.usb_vid, v.usb_pid)));
+                .child(ui::slider(
+                    gpui::ElementId::Name(format!("contrast-{}", item.uuid).into()),
+                    v.contrast as f32,
+                    theme::ACCENT_SOFT,
+                    cx.listener(move |this, set: &ui::SliderSet, _, cx| {
+                        if let Err(e) = this.state.set_vendor_level(index, "contrast", set.step as f64) {
+                            this.state.status = format!("{e}");
+                        }
+                        cx.notify();
+                    }),
+                ))
+                .child(ui::stat("USB", format!("{:04x}:{:04x}", v.usb_vid, v.usb_pid)))
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(ui::pill("btn-enabled", if v.enabled { "Enabled" } else { "Disabled" }, v.enabled).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                if let Err(e) = this.state.toggle_enabled(index) {
+                                    this.state.status = format!("{e}");
+                                }
+                                cx.notify();
+                            }),
+                        ))
+                        .child(ui::pill("btn-flip", "Flip", v.flipped).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                if let Err(e) = this.state.toggle_flip(index) {
+                                    this.state.status = format!("{e}");
+                                }
+                                cx.notify();
+                            },
+                        ))),
+                );
         }
 
         // Scrollable mode list — the only part that can grow without bound.

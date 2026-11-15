@@ -130,3 +130,55 @@ pub fn tidy(entries: &mut [Entry]) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(name: &str, x: i32, mirror: Option<&str>) -> Entry {
+        Entry {
+            uuid: name.into(),
+            name: name.into(),
+            x,
+            y: 0,
+            mode_id: None,
+            width: 1920,
+            height: 1080,
+            hidpi: false,
+            rotation: 0,
+            mirror_of: mirror.map(str::to_owned),
+            main: false,
+        }
+    }
+
+    #[test]
+    fn mirror_target_roundtrips_through_json() {
+        let profile = Profile {
+            version: 1,
+            displays: vec![entry("A", 0, None), entry("B", 1920, Some("A"))],
+        };
+        let text = serde_json::to_string(&profile).unwrap();
+        assert!(text.contains("\"mirror_of\":\"A\""));
+        let back: Profile = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, profile);
+    }
+
+    #[test]
+    fn tidy_keeps_mirrored_display_out_of_the_row() {
+        let mut rows = vec![entry("A", 0, None), entry("B", 5000, Some("A")), entry("C", 900, None)];
+        tidy(&mut rows);
+        let b = rows.iter().find(|e| e.uuid == "B").unwrap();
+        assert_eq!(b.x, 5000, "mirrored entry must not be re-flowed");
+        let xs: Vec<i32> = rows.iter().filter(|e| e.mirror_of.is_none()).map(|e| e.x).collect();
+        assert_eq!(xs, vec![0, 1920]);
+    }
+
+    #[test]
+    fn tidy_pins_the_main_display_at_origin() {
+        let mut rows = vec![entry("A", 4000, None), entry("B", 0, None)];
+        rows[1].main = true;
+        tidy(&mut rows);
+        assert_eq!(rows.iter().find(|e| e.main).unwrap().x, 0);
+        assert!(rows.iter().all(|e| e.y == 0));
+    }
+}

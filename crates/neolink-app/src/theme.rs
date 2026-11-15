@@ -4,7 +4,7 @@
 //! glass rather than as flat grey, and every accent is tuned to stay legible against both the
 //! window's vibrancy layer and an opaque fallback.
 
-use gpui::{Hsla, Rgba};
+use gpui::Rgba;
 
 /// `const`-friendly constructor so the palette can live in constants.
 const fn rgba(hex: u32, a: f32) -> Rgba {
@@ -20,8 +20,6 @@ const fn rgba(hex: u32, a: f32) -> Rgba {
 pub const BASE_TOP: Rgba = rgba(0x0b0e14, 1.0);
 pub const BASE_BOTTOM: Rgba = rgba(0x151a24, 1.0);
 
-/// Glass panel fills, from most to least opaque.
-pub const GLASS_STRONG: Rgba = rgba(0x212633, 0.86);
 pub const GLASS: Rgba = rgba(0x1c2230, 0.62);
 pub const GLASS_SOFT: Rgba = rgba(0x1a2130, 0.38);
 pub const SHEEN: Rgba = rgba(0xffffff, 0.07);
@@ -39,7 +37,6 @@ pub const TEXT_FAINT: Rgba = rgba(0x66707f, 1.0);
 /// Accents.
 pub const ACCENT: Rgba = rgba(0x5eead4, 1.0);
 pub const ACCENT_SOFT: Rgba = rgba(0x2dd4bf, 1.0);
-pub const ACCENT_DEEP: Rgba = rgba(0x0f766e, 1.0);
 pub const WARN: Rgba = rgba(0xf0b252, 1.0);
 pub const DANGER: Rgba = rgba(0xf87171, 1.0);
 pub const OK: Rgba = rgba(0x7dd3a0, 1.0);
@@ -61,8 +58,4 @@ pub fn swatch(index: usize) -> Rgba {
 /// Same colour at a different alpha; used for hover fills and accent washes.
 pub fn with_alpha(c: Rgba, a: f32) -> Rgba {
     Rgba { a, ..c }
-}
-
-pub fn text_hsla() -> Hsla {
-    TEXT.into()
 }

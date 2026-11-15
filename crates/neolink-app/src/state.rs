@@ -3,11 +3,14 @@
 //! All mutations funnel through this module so the UI never has to know whether a change touches
 //! CoreGraphics, a virtual display we created, or the vendor agent over XPC.
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use neolink_core::agent::{self, VendorDisplay};
 use neolink_core::displays::{self, Display, Mode};
 use neolink_core::layout::{self, Entry, Profile};
 use neolink_core::virtual_display::{VirtualDisplay, VirtualDisplayConfig, VirtualMode};
+use neolink_core::{loginitem, vendor};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 
 /// A display as the UI sees it: CoreGraphics truth, plus our own provenance.
@@ -28,8 +31,6 @@ pub struct Item {
     pub rotation: u32,
     pub main: bool,
     pub mirrored: bool,
-    pub brightness: f64,
-    pub contrast: f64,
     pub enabled: bool,
 }
 
@@ -50,8 +51,6 @@ impl Item {
             rotation: d.rotation.round() as u32,
             main: d.main,
             mirrored: d.mirror_of.is_some(),
-            brightness: 1.0,
-            contrast: 1.0,
             enabled: d.active,
         }
     }
@@ -65,9 +64,6 @@ impl Item {
         format!("{} × {}{}", self.width, self.height, scale)
     }
 
-    pub fn aspect(&self) -> f32 {
-        if self.height == 0 { 16.0 / 9.0 } else { self.width as f32 / self.height as f32 }
-    }
 }
 
 /// A virtual display we created, plus the config that produced it.
@@ -89,6 +85,14 @@ pub struct AppState {
     /// Set while a display card is being dragged on the arrangement canvas.
     pub dragging: Option<usize>,
     pub dirty: bool,
+    /// Cached view of the vendor package cache; refreshed with the desktop.
+    pub vendor: vendor::Status,
+    /// Live line from the background installer, if one is running.
+    pub vendor_progress: Arc<Mutex<Option<String>>>,
+    /// Shared with the worker so it can clear the flag when it finishes.
+    pub vendor_busy: Arc<AtomicBool>,
+    /// Mirrors the LaunchAgent on disk.
+    pub launch_at_login: bool,
 }
 
 impl AppState {
@@ -104,6 +108,10 @@ impl AppState {
             canvas_zoom: 1.0,
             dragging: None,
             dirty: false,
+            vendor: vendor::status(),
+            vendor_progress: Arc::new(Mutex::new(None)),
+            vendor_busy: Arc::new(AtomicBool::new(false)),
+            launch_at_login: loginitem::enabled(),
         };
         state.refresh();
         // Start with the primary display selected so the inspector is never empty on launch.
@@ -117,6 +125,73 @@ impl AppState {
 
     /// Re-read the desktop. Cheap (a handful of CoreGraphics calls) and called on every tick, so
     /// the UI is never stale.
+    /// Re-read install state. Called from the same tick as `refresh`, but split out so the cheap
+    /// CoreGraphics pass is not gated on the filesystem walk.
+    pub fn refresh_vendor(&mut self) {
+        self.vendor = vendor::status();
+        if let Ok(slot) = self.vendor_progress.lock() {
+            if let Some(line) = slot.as_ref() {
+                self.status = line.clone();
+            }
+        }
+    }
+
+    /// Fetch, verify and install the pinned vendor package, off the UI thread. `installer` prompts
+    /// for an admin password on the main queue, so the app must not block while it does.
+    pub fn provision(&mut self) {
+        if self.busy() {
+            return;
+        }
+        self.vendor_busy.store(true, Ordering::SeqCst);
+        self.status = format!("Preparing DisplayLink {}…", vendor::VERSION);
+        let slot = self.vendor_progress.clone();
+        let busy = self.vendor_busy.clone();
+        std::thread::spawn(move || {
+            let mut report = |stage: vendor::Stage, done: u64, total: u64| {
+                let text = match stage {
+                    vendor::Stage::Download if total > 0 => {
+                        format!("Downloading DisplayLink: {:.1}/{:.1} MiB", done as f64 / 1048576.0, total as f64 / 1048576.0)
+                    }
+                    vendor::Stage::Download => {
+                        format!("Downloading DisplayLink: {:.1} MiB", done as f64 / 1048576.0)
+                    }
+                    vendor::Stage::Verify => "Verifying checksum…".into(),
+                    vendor::Stage::Expand => "Expanding package…".into(),
+                    vendor::Stage::Install => "Installing (admin password required)…".into(),
+                };
+                if let Ok(mut s) = slot.lock() {
+                    *s = Some(text);
+                }
+            };
+            let result = vendor::provision(&mut report);
+            let text = match result {
+                Ok(()) => {
+                    let _ = neolink_core::agent::start();
+                    format!("DisplayLink {} installed and started", vendor::VERSION)
+                }
+                Err(e) => format!("Install failed: {e}"),
+            };
+            if let Ok(mut s) = slot.lock() {
+                *s = Some(text);
+            }
+            busy.store(false, Ordering::SeqCst);
+        });
+    }
+
+    pub fn toggle_login_item(&mut self) {
+        self.status = match loginitem::toggle() {
+            Ok(true) => "Will open at login".into(),
+            Ok(false) => "Removed from login items".into(),
+            Err(e) => format!("Login item failed: {e}"),
+        };
+        self.launch_at_login = loginitem::enabled();
+    }
+
+    /// True while a background install is in flight.
+    pub fn busy(&self) -> bool {
+        self.vendor_busy.load(Ordering::SeqCst)
+    }
+
     pub fn refresh(&mut self) {
         let vendors = if agent::reachable() { agent::vendor_displays() } else { Vec::new() };
         let live = displays::list();
@@ -176,6 +251,7 @@ impl AppState {
         self.capture_allowed = displays::screen_capture_allowed();
     }
 
+    #[allow(dead_code)]
     pub fn selected_item(&self) -> Option<&Item> {
         self.selected.and_then(|i| self.items.get(i))
     }
@@ -216,7 +292,13 @@ impl AppState {
                 .collect();
         }
         self.status = format!("Created “{}”", cfg.name);
-        Ok(self.selected.unwrap_or(0))
+        // Return the new display's own index; refresh may have re-sorted the list, so the
+        // selected index is not necessarily the display we just made.
+        let pos = self.items.iter().position(|i| i.uuid == uuid);
+        if let Some(pos) = pos {
+            self.selected = Some(pos);
+        }
+        pos.ok_or_else(|| anyhow!("virtual display was created but is not enumerable"))
     }
 
     /// Remove a display and release it back to the system.
@@ -231,16 +313,55 @@ impl AppState {
         Ok(())
     }
 
+    /// Enable/disable a display. Vendor-managed docks go through the agent, which keeps the USB
+    /// pipeline running; anything else is a CoreGraphics mode round trip.
     pub fn toggle_enabled(&mut self, index: usize) -> Result<()> {
         let Some(item) = self.items.get(index).cloned() else { return Ok(()) };
         if let Some(v) = &item.vendor {
             let want = !v.enabled;
-            agent::vendor_set("enabled", &v.persistent_display_id, want as u8 as f64);
+            if !agent::vendor_set("enabled", &v.persistent_display_id, want as u8 as f64) {
+                self.refresh();
+                return Err(anyhow!("DisplayLink agent did not apply the change"));
+            }
+            self.status = format!("{} “{}”", if want { "Enabled" } else { "Disabled" }, item.name);
         } else if let Some(d) = &item.cg {
             if let Some(mode_id) = d.mode.map(|m| m.id) {
                 let changes = vec![displays::Change { id: d.id, mode_id: Some(mode_id), ..Default::default() }];
                 displays::apply(&changes, false)?;
             }
+        }
+        self.refresh();
+        Ok(())
+    }
+
+    /// Set vendor brightness or contrast (0.0–1.0) for the selected dock.
+    pub fn set_vendor_level(&mut self, index: usize, op: &str, value: f64) -> Result<()> {
+        let Some(item) = self.items.get(index).cloned() else { return Ok(()) };
+        let Some(v) = item.vendor else { return Ok(()) };
+        let value = value.clamp(0.0, 1.0);
+        if !agent::vendor_set(op, &v.persistent_display_id, value) {
+            self.refresh();
+            return Err(anyhow!("DisplayLink agent did not apply {op}"));
+        }
+        if let Some(it) = self.items.get_mut(index) {
+            if let Some(v) = it.vendor.as_mut() {
+                match op {
+                    "brightness" => v.brightness = value,
+                    "contrast" => v.contrast = value,
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Flip the vendor framebuffer, for docks mounted upside down.
+    pub fn toggle_flip(&mut self, index: usize) -> Result<()> {
+        let Some(item) = self.items.get(index).cloned() else { return Ok(()) };
+        let Some(v) = item.vendor else { return Ok(()) };
+        if !agent::vendor_set("flip", &v.persistent_display_id, (!v.flipped) as u8 as f64) {
+            self.refresh();
+            return Err(anyhow!("DisplayLink agent did not apply the flip"));
         }
         self.refresh();
         Ok(())
@@ -336,28 +457,36 @@ impl AppState {
         Ok(())
     }
 
+    /// One profile entry for an item, resolving the mirror master to its UUID so the record
+    /// survives a reconnect (CoreGraphics ids do not).
+    fn entry(&self, i: &Item) -> Entry {
+        let mirror_of = i
+            .cg
+            .as_ref()
+            .and_then(|d| d.mirror_of)
+            .and_then(|id| self.items.iter().find(|o| o.cg.as_ref().is_some_and(|c| c.id == id)))
+            .map(|o| o.uuid.clone());
+        Entry {
+            uuid: i.uuid.clone(),
+            name: i.name.clone(),
+            x: i.x,
+            y: i.y,
+            mode_id: if i.virtual_cfg.is_some() {
+                None
+            } else {
+                i.cg.as_ref().and_then(|d| d.mode.map(|m| m.id))
+            },
+            width: i.width,
+            height: i.height,
+            hidpi: i.hidpi,
+            rotation: i.rotation,
+            mirror_of,
+            main: i.main,
+        }
+    }
+
     pub fn tidy(&mut self) -> Result<()> {
-        let mut entries: Vec<Entry> = self
-            .items
-            .iter()
-            .map(|i| Entry {
-                uuid: i.uuid.clone(),
-                name: i.name.clone(),
-                x: i.x,
-                y: i.y,
-                mode_id: if i.virtual_cfg.is_some() {
-                    None
-                } else {
-                    i.cg.as_ref().and_then(|d| d.mode.map(|m| m.id))
-                },
-                width: i.width,
-                height: i.height,
-                hidpi: i.hidpi,
-                rotation: i.rotation,
-                mirror_of: None,
-                main: i.main,
-            })
-            .collect();
+        let mut entries: Vec<Entry> = self.items.iter().map(|i| self.entry(i)).collect();
         layout::tidy(&mut entries);
         let profile = Profile { version: 1, displays: entries };
         layout::apply(&profile)?;
@@ -386,27 +515,7 @@ impl AppState {
     pub fn save(&self) -> Result<()> {
         let profile = Profile {
             version: 1,
-            displays: self
-                .items
-                .iter()
-                .map(|i| Entry {
-                    uuid: i.uuid.clone(),
-                    name: i.name.clone(),
-                    x: i.x,
-                    y: i.y,
-                    mode_id: if i.virtual_cfg.is_some() {
-                        None
-                    } else {
-                        i.cg.as_ref().and_then(|d| d.mode.map(|m| m.id))
-                    },
-                    width: i.width,
-                    height: i.height,
-                    hidpi: i.hidpi,
-                    rotation: i.rotation,
-                    mirror_of: None,
-                    main: i.main,
-                })
-                .collect(),
+            displays: self.items.iter().map(|i| self.entry(i)).collect(),
         };
         layout::save(&profile)?;
         Ok(())

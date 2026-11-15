@@ -18,15 +18,6 @@ pub fn glass(radius: f32) -> Div {
         .shadow_lg()
 }
 
-/// A denser panel for content that must stay readable over busy wallpaper.
-pub fn glass_strong(radius: f32) -> Div {
-    div()
-        .bg(theme::GLASS_STRONG)
-        .border_1()
-        .border_color(theme::HAIRLINE)
-        .rounded(px(radius))
-        .shadow_lg()
-}
 
 /// Inset chip, used for badges and small stats.
 pub fn chip() -> Div {
@@ -164,7 +155,55 @@ pub fn meter(ratio: f32, color: impl Into<Hsla>) -> impl IntoElement {
         )
 }
 
+/// Value a slider cell reports when clicked.
+#[derive(Clone, Copy, Debug)]
+pub struct SliderSet {
+    pub step: f32,
+}
+
+/// An interactive slider. GPUI click events carry only window coordinates, so the track is split
+/// into 20 hit cells; each cell reports its own step, which is exact for a click anywhere in it.
+pub fn slider(
+    id: impl Into<gpui::ElementId>,
+    ratio: f32,
+    color: impl Into<Hsla>,
+    on_set: impl Fn(&SliderSet, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> Div {
+    const STEPS: usize = 20;
+    let on_set = std::rc::Rc::new(on_set);
+    let r = ratio.clamp(0.0, 1.0);
+    let fill = color.into();
+    let lit = (r * STEPS as f32).round() as usize;
+    let name = id_hint(id);
+    let mut row = div().flex().items_center().gap(px(2.0)).h(px(16.0)).w_full();
+    for i in 0..STEPS {
+        let set = on_set.clone();
+        row = row.child(
+            div()
+                .id(gpui::ElementId::Name(format!("{name}-{i}").into()))
+                .flex_1()
+                .h(px(4.0))
+                .rounded_full()
+                .bg(if i < lit { fill } else { theme::SHEEN.into() })
+                .cursor_pointer()
+                .hover(|s| s.h(px(7.0)))
+                .on_click(move |_, window, cx| set(&SliderSet { step: (i + 1) as f32 / STEPS as f32 }, window, cx)),
+        );
+    }
+    div().w_full().py_0p5().child(row)
+}
+
+fn id_hint<T: Into<gpui::ElementId>>(id: T) -> String {
+    match id.into() {
+        gpui::ElementId::Name(n) => n.to_string(),
+        gpui::ElementId::Integer(i) => i.to_string(),
+        gpui::ElementId::Uuid(u) => format!("{u:?}"),
+        _ => "slider".into(),
+    }
+}
+
 /// Draws a small arrow/chevron using two rotated borders.
+#[allow(dead_code)]
 pub fn chevron(_up: bool) -> impl IntoElement {
     div()
         .size(px(6.0))
@@ -184,10 +223,12 @@ pub fn stat(name: &'static str, text: impl Into<SharedString>) -> impl IntoEleme
         .child(value(text))
 }
 
+#[allow(dead_code)]
 pub fn accent_text(text: impl Into<SharedString>) -> impl IntoElement {
     div().text_sm().text_color(theme::ACCENT).child(text.into())
 }
 
+#[allow(dead_code)]
 pub fn warn_text(text: impl Into<SharedString>) -> impl IntoElement {
     div().text_xs().text_color(theme::WARN).child(text.into())
 }

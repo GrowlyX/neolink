@@ -1,48 +1,44 @@
-use neolink_core::displays;
-use neolink_core::virtual_display::*;
-
-fn show(tag: &str, id: u32) {
-    let d = displays::list().into_iter().find(|d| d.id == id);
-    match d {
-        Some(d) => println!(
-            "{tag:<26} {}x{} px{}x{} rot{}",
-            d.width,
-            d.height,
-            d.mode.map(|m| m.pixel_width).unwrap_or(0),
-            d.mode.map(|m| m.pixel_height).unwrap_or(0),
-            d.rotation
-        ),
-        None => println!("{tag:<26} MISSING"),
-    }
-}
+use neolink_core::{displays, layout, virtual_display::*};
 
 fn main() {
-    let base = VirtualDisplayConfig {
-        modes: vec![VirtualMode::new(1920, 1080)],
+    let cfg = VirtualDisplayConfig {
+        modes: vec![VirtualMode::new(3840, 2160), VirtualMode::new(1920, 1080)],
         hidpi: true,
         ..Default::default()
     };
-    let mut vd = VirtualDisplay::new(&base).unwrap();
+    let mut vd = VirtualDisplay::new(&cfg).unwrap();
     let id = vd.display_id();
-    std::thread::sleep(std::time::Duration::from_millis(700));
-    show("created(hidpi)", id);
+    std::thread::sleep(std::time::Duration::from_millis(900));
+    println!("created: online={}", displays::list().iter().any(|d| d.id == id));
 
-    let mut c = base.clone();
-    c.rotation = 90;
-    vd.reconfigure(&c).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(700));
-    show("rot90", id);
+    // shrink to a single mode (mirrors set_mode on a virtual display)
+    let mut single = cfg.clone();
+    single.modes = vec![VirtualMode::new(1920, 1080)];
+    vd.reconfigure(&single).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    println!("after shrink: online={}", displays::list().iter().any(|d| d.id == id));
 
-    c.rotation = 0;
-    vd.reconfigure(&c).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(700));
-    show("rot0 again", id);
-
+    // origin move, as the canvas does
     displays::apply(&[displays::Change { id, origin: Some((1600, 40)), ..Default::default() }], false).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(700));
-    show("after origin", id);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    println!("after origin: online={}", displays::list().iter().any(|d| d.id == id));
 
-    vd.reconfigure(&c).unwrap();
+    // tidy(): layout::apply over all displays
+    let all: Vec<layout::Entry> = displays::list().iter().map(|d| layout::Entry {
+        uuid: d.uuid.clone(), name: d.name.clone(), x: d.x, y: d.y,
+        mode_id: if d.id == id { None } else { d.mode.map(|m| m.id) },
+        width: d.width, height: d.height, hidpi: false, rotation: 0,
+        mirror_of: None, main: d.main,
+    }).collect();
+    let profile = layout::Profile { version: 1, displays: all };
+    layout::apply(&profile).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(700));
-    show("reassert", id);
+    println!("after tidy: online={}", displays::list().iter().any(|d| d.id == id));
+
+    vd.reconfigure(&single).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    println!("after reassert: online={}", displays::list().iter().any(|d| d.id == id));
+    if let Some(d) = displays::list().into_iter().find(|d| d.id == id) {
+        println!("final: {}x{}", d.width, d.height);
+    }
 }

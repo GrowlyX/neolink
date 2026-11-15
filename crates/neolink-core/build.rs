@@ -5,4 +5,5 @@ fn main() {
         .flag("-fobjc-arc")
         .compile("neolink_xpc_shim");
     println!("cargo:rustc-link-lib=framework=Foundation");
+    println!("cargo:rustc-link-lib=compression");
 }

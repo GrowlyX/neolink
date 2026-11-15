@@ -2,3 +2,8 @@ pub mod displays;
 pub mod virtual_display;
 pub mod agent;
 pub mod layout;
+pub mod dl3;
+pub mod transport;
+pub mod vendor;
+pub mod spkg;
+pub mod loginitem;

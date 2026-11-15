@@ -21,11 +21,34 @@ struct Neolink {
     state: AppState,
     /// Active drag on the arrangement canvas, if any.
     drag_anchor: Option<arrangement::Drag>,
+    notify_rx: Option<std::sync::mpsc::Receiver<neolink_core::agent::Notification>>,
 }
 
 impl Neolink {
     fn new() -> Self {
-        Self { state: AppState::new(), drag_anchor: None }
+        let (tx, rx) = std::sync::mpsc::channel();
+        // The callback runs on an XPC queue; it only forwards, so the UI never blocks there.
+        let subscribed = neolink_core::agent::subscribe(move |n| {
+            let _ = tx.send(n);
+        });
+        Self {
+            state: AppState::new(),
+            drag_anchor: None,
+            notify_rx: subscribed.then_some(rx),
+        }
+    }
+
+    /// Drain queued agent notifications. Uses the event stream when it is live, otherwise only
+    /// refreshes if a brightness/contrast/flip confirmation needs painting.
+    fn drain_notifications(&mut self) -> bool {
+        let Some(rx) = &self.notify_rx else { return false };
+        let mut dirty = false;
+        while let Ok(n) = rx.try_recv() {
+            if let neolink_core::agent::Notification::Displays { .. } = n {
+                dirty = true;
+            }
+        }
+        dirty
     }
 }
 
@@ -72,7 +95,18 @@ impl Neolink {
             .gap_2()
             .text_xs()
             .text_color(theme::TEXT_FAINT)
-            .child(div().flex_1().whitespace_nowrap().truncate().child(self.state.status.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .whitespace_nowrap()
+                    .truncate()
+                    .text_color(if self.state.status.contains("failed") {
+                        theme::DANGER
+                    } else {
+                        theme::TEXT_FAINT
+                    })
+                    .child(self.state.status.clone()),
+            )
             .child(format!("{} display{}", self.state.items.len(), if self.state.items.len() == 1 { "" } else { "s" }))
     }
 
@@ -127,13 +161,43 @@ impl Neolink {
                     .child(ui::dot(status_color))
                     .child(div().text_xs().text_color(theme::TEXT_DIM).child(status_text)),
             )
-            .child(ui::pill("btn-refresh", "Refresh", false).on_click(cx.listener(
-                |this, _, _, cx| {
-                    this.state.refresh();
-                    this.state.status = "Refreshed".into();
-                    cx.notify();
-                },
-            )))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(ui::pill("btn-refresh", "Refresh", false).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.state.refresh();
+                            this.state.status = "Refreshed".into();
+                            cx.notify();
+                        },
+                    )))
+                    .child(
+                        ui::pill("btn-login", "At login", self.state.launch_at_login)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state.toggle_login_item();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        ui::pill(
+                            "btn-install",
+                            if self.state.busy() {
+                                "Installing…"
+                            } else if agent.installed {
+                                "Reinstall DisplayLink"
+                            } else {
+                                "Get DisplayLink"
+                            },
+                            !agent.installed,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.state.provision();
+                            cx.notify();
+                        })),
+                    ),
+            )
     }
 }
 
@@ -201,13 +265,19 @@ fn main() {
                 cx.spawn(async move |cx: &mut AsyncApp| {
                     loop {
                         cx.background_executor()
-                            .timer(std::time::Duration::from_millis(1500))
+                            .timer(std::time::Duration::from_millis(500))
                             .await;
                         if cx
                             .update(|cx| {
                                 weak.update(cx, |this, cx| {
-                                    this.state.refresh();
-                                    cx.notify();
+                                    let notified = this.drain_notifications();
+                                    // With a live notification stream a refresh is only needed for
+                                    // structural changes; polling stays as the fallback.
+                                    this.state.refresh_vendor();
+                                    if this.notify_rx.is_none() || notified {
+                                        this.state.refresh();
+                                        cx.notify();
+                                    }
                                 })
                                 .is_err()
                             })
@@ -226,7 +296,7 @@ fn main() {
                         cx.background_executor()
                             .timer(std::time::Duration::from_millis(900))
                             .await;
-                        cx.update(|cx| {
+                        let _ = cx.update(|cx| {
                             weak.update(cx, |this, cx| {
                                 let cfg = neolink_core::virtual_display::VirtualDisplayConfig {
                                     modes: state::suggested_modes(),
