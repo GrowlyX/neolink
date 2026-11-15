@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="520" viewBox="0 0 1600 520" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Neolink — a native display manager for macOS</title>
+  <desc id="desc">Neolink wordmark beside a clean arrangement of three connected displays.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="520" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#08090B"/><stop offset="1" stop-color="#17191D"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="matrix(564 206 -143 392 1180 122)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity=".11"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#25282D"/><stop offset="1" stop-color="#111316"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="520" rx="28" fill="url(#bg)"/>
+  <rect width="1600" height="520" rx="28" fill="url(#glow)"/>
+  <g transform="translate(112 101)">
+    <path fill="#F5F5F5" d="M44 1A57 57 0 0 0 71.6 111.4L62.4 93.9A38.8 38.8 0 0 1 43.2 31.5L88 110.1A57 57 0 0 0 60.4-.3l9.2 17.5A38.8 38.8 0 0 1 88.8 79.6Z"/>
+    <text x="124" y="79" fill="#F5F5F5" font-family="Arial, Helvetica, sans-serif" font-size="70" font-weight="500" letter-spacing="12">NEOLINK</text>
+  </g>
+  <text x="120" y="310" fill="#F5F5F5" font-family="Arial, Helvetica, sans-serif" font-size="43" font-weight="600">One workspace for every display.</text>
+  <text x="120" y="366" fill="#A5A8AE" font-family="Arial, Helvetica, sans-serif" font-size="23">Native macOS display management, arrangement, and virtual screens.</text>
+  <g transform="translate(900 206)">
+    <rect x="0" y="75" width="222" height="142" rx="18" fill="url(#tile)" stroke="#62666D" stroke-width="2"/>
+    <rect x="220" y="0" width="250" height="217" rx="18" fill="#F4F4F4"/>
+    <rect x="220" y="0" width="250" height="8" rx="4" fill="#81858B"/>
+    <rect x="468" y="54" width="232" height="163" rx="18" fill="url(#tile)" stroke="#62666D" stroke-width="2"/>
+    <text x="111" y="151" text-anchor="middle" fill="#D5D7DA" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="600" letter-spacing="2">DISPLAY</text>
+    <text x="345" y="124" text-anchor="middle" fill="#17191C" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="600" letter-spacing="2">MAIN DISPLAY</text>
+    <text x="584" y="143" text-anchor="middle" fill="#D5D7DA" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="600" letter-spacing="2">DISPLAY</text>
+    <text x="111" y="181" text-anchor="middle" fill="#969AA1" font-family="Arial, Helvetica, sans-serif" font-size="17">1920 × 1080</text>
+    <text x="345" y="155" text-anchor="middle" fill="#666A70" font-family="Arial, Helvetica, sans-serif" font-size="17">1512 × 982</text>
+    <text x="584" y="174" text-anchor="middle" fill="#969AA1" font-family="Arial, Helvetica, sans-serif" font-size="17">2560 × 1440</text>
+  </g>
+  <text x="120" y="462" fill="#767B83" font-family="Arial, Helvetica, sans-serif" font-size="16" letter-spacing="2">BUILT FOR macOS 14+</text>
+</svg>

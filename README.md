@@ -1,104 +1,100 @@
 <p align="center">
-  <a href="https://github.com/GrowlyX/neolink/actions/workflows/ci.yml"><img src="https://github.com/GrowlyX/neolink/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/GrowlyX/neolink/releases/latest"><img src="https://img.shields.io/github/v/release/GrowlyX/neolink" alt="latest release"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%2014%2B-blue" alt="macOS 14+">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-blue" alt="MIT"></a>
+  <img src="docs/assets/neolink-banner.svg" alt="Neolink — native display management for macOS" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/GrowlyX/neolink/actions/workflows/ci.yml"><img src="https://github.com/GrowlyX/neolink/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/GrowlyX/neolink/releases/latest"><img src="https://img.shields.io/github/v/release/GrowlyX/neolink" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/macOS-14%2B-black" alt="macOS 14 or newer">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-white" alt="MIT license"></a>
 </p>
 
 # Neolink
 
-A native, Rust display manager for macOS that can drive displays the way
-DisplayLink Manager 17.x does, with our own UI, transport and arrangement
-engine. Nothing from Synaptics is bundled: the official package is fetched at
-runtime, hash-pinned, and installed only when you ask.
+A native display manager for macOS, written in Rust. Neolink brings display arrangement, virtual screens, and DisplayLink controls into one app. Its UI is built with GPUI, and its display operations use CoreGraphics.
 
-Two halves:
+> **Early development:** Neolink is pre-1.0. The DisplayLink USB transport is reverse engineered and has not been validated with hardware. Review [COMPATIBILITY.md](COMPATIBILITY.md) before using it with a dock.
 
-- **`neolink-core`** — CoreGraphics enumeration/reconfiguration, `CGVirtualDisplay`
-  backing store, a DL3 USB transport, an NSXPC client for the vendor agent, and
-  the on-demand vendor package fetcher.
-- **`neolink-app`** — a GPUI window (device list / arrangement canvas / inspector)
-  over that core.
+## What you can do
 
-`docs/RE-FINDINGS.md` records how the vendor 17.1.56 package works and which
-private APIs are used.
+- See connected displays and arrange them by dragging their cards on the canvas.
+- Change display modes, choose the main display, mirror screens, and save or tidy a layout.
+- Create and configure virtual displays, including resolution, HiDPI backing, and rotation.
+- View DisplayLink device details and adjust brightness, contrast, and enable/flip state when the vendor agent is available.
+- Fetch and install the official DisplayLink package on demand. Neolink does not bundle Synaptics software or firmware.
+- Set the app appearance, configure launch at login, and open macOS privacy settings for Screen Recording and Accessibility.
+
+Monitor maker marks are shown when the connected display name matches a known brand. Neolink uses the [Feather](https://github.com/feathericons/feather) icon set and Geist typeface.
 
 ## Install
 
-There are two install paths, and they are not exclusive:
+Neolink requires macOS 14 or newer. Download the latest app bundle from [GitHub Releases](https://github.com/GrowlyX/neolink/releases/latest). The bundle is universal and currently ad-hoc signed; macOS may require you to remove quarantine or approve the app in System Settings on first launch. See [Development](docs/DEVELOPMENT.md#releasing) for release signing details.
 
-1. **The vendor driver** (needed for a real dock to show a picture). Press
-   **Get DisplayLink** in the app, or:
-
-   ```sh
-   neolinkctl vendor provision
-   ```
-
-   That downloads the official 17.1.56 package from Synaptics, verifies it
-   against the pinned SHA-256, expands it into
-   `~/Library/Application Support/Neolink/vendor/`, and runs the system
-   installer once (one admin prompt). `vendor status`, `vendor expand`,
-   `vendor packs` and `vendor purge` manage the cache separately.
-
-2. **Neolink itself**:
-
-   ```sh
-   scripts/bundle.sh --release          # target/release/Neolink.app
-   scripts/bundle.sh --release --install
-   ```
-
-   The bundle is universal and ad-hoc signed. For distribution, swap the
-   `codesign --sign -` line for a Developer ID identity and notarise with
-   `notarytool`.
-
-## Build
+A real DisplayLink dock may also need the vendor driver. You can install it from the app with **Get DisplayLink**, or use the CLI:
 
 ```sh
-cargo build -p neolink
-cargo test -p neolink-core --lib
+neolinkctl vendor provision
 ```
 
-`NEOLINK_DEMO=1` (or `2` for the full action path) exercises the app on launch
-without Accessibility permission.
+Neolink fetches the official package at runtime, verifies its pinned SHA-256, and invokes the macOS installer when you request installation. Package cache commands include `vendor status`, `vendor expand`, `vendor packs`, and `vendor purge`.
 
-`neolinkctl pack <file.spkg> [--out DIR]` reassembles a dock pack's frames and
-optionally writes the image out; `neolinkctl login on|off|status` manages the
-LaunchAgent.
+## Build and run
 
-## Layout
+Install the Xcode command-line tools, Rust toolchain, and the macOS SDK, then run:
 
-```
-crates/neolink-core/src/virtual_display.rs   CGVirtualDisplay engine
-crates/neolink-core/src/displays.rs          CG enumeration + reconfiguration
-crates/neolink-core/src/agent.rs             vendor agent supervision + XPC
-crates/neolink-core/src/layout.rs            profile capture/apply
-crates/neolink-core/src/dl3.rs               DL3 wire format
-crates/neolink-core/src/transport.rs         USB transport
-crates/neolink-core/src/spkg.rs              .spkg container + frame table
-crates/neolink-core/src/bin/spkgdump.rs      inspect a pack's frame table
-crates/neolink-core/src/bin/edidgen.rs       synthesise an EDID for the dock
-crates/neolink-core/src/vendor.rs            pinned package fetch/verify/install
-crates/neolink-app/                          GPUI UI
+```sh
+cargo run -p neolink
 ```
 
-## Licence
+Build the app bundle with:
 
-MIT for Neolink's own code.
+```sh
+scripts/bundle.sh --release
+# target/release/Neolink.app
+```
 
-DisplayLink Manager and the per-dock `.spkg` firmware/EDID packs are Synaptics'
-and stay under their EULA. Neolink ships none of them: it stores a URL and a
-SHA-256 and pulls the bytes from Synaptics' own server at install time. The RE
-notes in `docs/RE-FINDINGS.md` describe behaviour and structure only.
+For the development workflow, CI checks, and release process, see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-## Docs
+### Demo mode
 
-- [COMPATIBILITY.md](COMPATIBILITY.md): what works, what doesn't, measured
-- [docs/RE-FINDINGS.md](docs/RE-FINDINGS.md): how the vendor package and the
-  private APIs actually work
-- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): building, testing, what CI checks
-- [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md)
+`NEOLINK_DEMO=1` creates a virtual display when the app starts. `NEOLINK_DEMO=2` also exercises the display action paths and saves a demo layout. These modes change the local macOS display configuration; close or remove the demo display when finished.
 
-## Status
+```sh
+NEOLINK_DEMO=1 cargo run -p neolink
+```
 
-Pre-1.0. The virtual-display side works; the USB side is reverse engineered and
-**unvalidated on hardware**. See COMPATIBILITY.md before trusting it with a dock.
+## Architecture
+
+| Crate | Responsibility |
+| --- | --- |
+| `neolink-app` | GPUI app: settings, display arrangement canvas, inspector, and user actions |
+| `neolink-core` | CoreGraphics display management, virtual screens, layout persistence, vendor agent/XPC, USB transport, and on-demand package installer |
+
+Useful source areas:
+
+```text
+crates/neolink-app/src/                 Native UI and app state
+crates/neolink-app/assets/              Neolink marks, Feather settings icon, Geist fonts, brand logos
+crates/neolink-core/src/displays.rs     CoreGraphics enumeration and reconfiguration
+crates/neolink-core/src/virtual_display.rs  CGVirtualDisplay engine
+crates/neolink-core/src/layout.rs       Layout profiles and persistence
+crates/neolink-core/src/agent.rs        Vendor agent supervision and XPC
+crates/neolink-core/src/transport.rs    DL3 USB transport
+crates/neolink-core/src/vendor.rs       Pinned package fetch, verify, and install
+```
+
+## Limitations
+
+The virtual-display and arrangement paths work locally. The USB transport has not been tested against a physical dock, and the frame capture/encode path is not connected yet. HDCP support and notarized distribution are also not implemented. The compatibility matrix and validation notes are in [COMPATIBILITY.md](COMPATIBILITY.md).
+
+## License and trademarks
+
+Neolink code is MIT licensed. Neolink redistributes no Synaptics DisplayLink binaries, drivers, or `.spkg` firmware; those remain subject to their owners’ terms and are downloaded from the official source when requested. Manufacturer marks identify display vendors and do not imply endorsement; their sources and notes are in [`crates/neolink-app/assets/brands/SOURCES.md`](crates/neolink-app/assets/brands/SOURCES.md). Geist is distributed under the SIL Open Font License; see [`crates/neolink-app/assets/fonts/OFL.txt`](crates/neolink-app/assets/fonts/OFL.txt).
+
+## Project docs
+
+- [Compatibility and validation](COMPATIBILITY.md)
+- [Development and CI](docs/DEVELOPMENT.md)
+- [Reverse engineering findings](docs/RE-FINDINGS.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)

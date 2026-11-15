@@ -8,12 +8,77 @@ use crate::theme;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, App, Div, Hsla, IntoElement, SharedString, Window};
 
+/// Resolve common monitor names to the official bundled brand marks.
+pub(crate) fn brand_logo(name: &str) -> Option<&'static str> {
+    let n = name.to_ascii_lowercase();
+    [
+        ("apple", "apple"),
+        ("lg", "lg"),
+        ("samsung", "samsung"),
+        ("dell", "dell"),
+        ("hp", "hp"),
+        ("hewlett", "hp"),
+        ("acer", "acer"),
+        ("asus", "asus"),
+        ("benq", "benq"),
+        ("viewsonic", "viewsonic"),
+        ("philips", "philips"),
+        ("lenovo", "lenovo"),
+        ("sony", "sony"),
+        ("msi", "msi"),
+        ("gigabyte", "gigabyte"),
+        ("aoc", "aoc"),
+        ("huawei", "huawei"),
+        ("xiaomi", "xiaomi"),
+        ("panasonic", "panasonic"),
+        ("tcl", "tcl"),
+        ("eizo", "eizo"),
+        ("iiyama", "iiyama"),
+        ("nec", "nec"),
+        ("sharp", "sharp"),
+        ("hisense", "hisense"),
+        ("razer", "razer"),
+        ("microsoft", "microsoft"),
+    ]
+    .iter()
+    .find_map(|(needle, brand)| n.contains(needle).then_some(*brand))
+    .map(|brand| match brand {
+        "apple" => "brands/apple.svg",
+        "lg" => "brands/lg.svg",
+        "samsung" => "brands/samsung.svg",
+        "dell" => "brands/dell.svg",
+        "hp" => "brands/hp.svg",
+        "acer" => "brands/acer.svg",
+        "asus" => "brands/asus.svg",
+        "benq" => "brands/benq.svg",
+        "viewsonic" => "brands/viewsonic.svg",
+        "philips" => "brands/philips.svg",
+        "lenovo" => "brands/lenovo.svg",
+        "sony" => "brands/sony.svg",
+        "msi" => "brands/msi.svg",
+        "gigabyte" => "brands/gigabyte.svg",
+        "aoc" => "brands/aoc.svg",
+        "huawei" => "brands/huawei.svg",
+        "xiaomi" => "brands/xiaomi.svg",
+        "panasonic" => "brands/panasonic.svg",
+        "tcl" => "brands/tcl.svg",
+        "eizo" => "brands/eizo.svg",
+        "iiyama" => "brands/iiyama.svg",
+        "nec" => "brands/nec.svg",
+        "sharp" => "brands/sharp.svg",
+        "hisense" => "brands/hisense.svg",
+        "razer" => "brands/razer.svg",
+        "microsoft" => "brands/microsoft.svg",
+        _ => "brands/apple.svg",
+    })
+}
+
 /// A frosted panel with an optional highlight border.
 pub fn glass(radius: f32) -> Div {
     div()
-        .bg(theme::GLASS)
+        .bg(theme::glass())
         .border_1()
-        .border_color(theme::HAIRLINE)
+        .border_color(theme::hairline())
         .rounded(px(radius))
         .shadow_lg()
 }
@@ -24,22 +89,22 @@ pub fn chip() -> Div {
         .px_2()
         .py_0p5()
         .rounded_full()
-        .bg(theme::GLASS_SOFT)
+        .bg(theme::glass_soft())
         .border_1()
-        .border_color(theme::HAIRLINE_SOFT)
+        .border_color(theme::hairline_soft())
         .text_xs()
-        .text_color(theme::TEXT_DIM)
+        .text_color(theme::text_dim())
 }
 
 pub fn label(text: impl Into<SharedString>) -> impl IntoElement {
     div()
         .text_xs()
-        .text_color(theme::TEXT_FAINT)
+        .text_color(theme::text_faint())
         .child(text.into())
 }
 
 pub fn value(text: impl Into<SharedString>) -> impl IntoElement {
-    div().text_sm().text_color(theme::TEXT).child(text.into())
+    div().text_sm().text_color(theme::text()).child(text.into())
 }
 
 /// Rounded pill button. `active` switches it to the accent treatment.
@@ -51,17 +116,17 @@ pub fn pill(
     let bg = if active {
         theme::with_alpha(theme::ACCENT, 0.18)
     } else {
-        theme::GLASS_SOFT
+        theme::glass_soft()
     };
     let fg = if active {
         theme::ACCENT
     } else {
-        theme::TEXT_DIM
+        theme::text_dim()
     };
     let border = if active {
         theme::with_alpha(theme::ACCENT, 0.45)
     } else {
-        theme::HAIRLINE_SOFT
+        theme::hairline_soft()
     };
     div()
         .id(id.into())
@@ -74,7 +139,7 @@ pub fn pill(
         .text_xs()
         .text_color(fg)
         .cursor_pointer()
-        .hover(|s| s.bg(theme::SHEEN).text_color(theme::TEXT))
+        .hover(|s| s.bg(theme::sheen()).text_color(theme::text()))
         .active(|s| s.opacity(0.8))
         .child(text.into())
 }
@@ -86,11 +151,11 @@ pub fn dot(color: impl Into<Hsla>) -> impl IntoElement {
 
 /// Top sheen: a 1px white gradient that sells the glass edge.
 pub fn sheen() -> impl IntoElement {
-    div().h(px(1.0)).w_full().bg(theme::SHEEN)
+    div().h(px(1.0)).w_full().bg(theme::sheen())
 }
 
 pub fn divider() -> impl IntoElement {
-    div().h(px(1.0)).w_full().bg(theme::HAIRLINE_SOFT)
+    div().h(px(1.0)).w_full().bg(theme::hairline_soft())
 }
 
 /// App glyph: two overlapping rounded rectangles suggesting a mirrored desktop.
@@ -133,7 +198,7 @@ pub fn toggle(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<Div> {
             theme::ACCENT,
         )
     } else {
-        (theme::SHEEN, px(2.0), theme::TEXT_DIM)
+        (theme::sheen(), px(2.0), theme::text_dim())
     };
     div()
         .id(id.into())
@@ -143,7 +208,7 @@ pub fn toggle(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<Div> {
         .rounded_full()
         .bg(track)
         .border_1()
-        .border_color(theme::HAIRLINE)
+        .border_color(theme::hairline())
         .cursor_pointer()
         .child(
             div()
@@ -163,7 +228,7 @@ pub fn meter(ratio: f32, color: impl Into<Hsla>) -> impl IntoElement {
         .h(px(4.0))
         .w_full()
         .rounded_full()
-        .bg(theme::SHEEN)
+        .bg(theme::sheen())
         .child(
             div()
                 .h(px(4.0))
@@ -207,7 +272,7 @@ pub fn slider(
                 .flex_1()
                 .h(px(4.0))
                 .rounded_full()
-                .bg(if i < lit { fill } else { theme::SHEEN.into() })
+                .bg(if i < lit { fill } else { theme::sheen().into() })
                 .cursor_pointer()
                 .hover(|s| s.h(px(7.0)))
                 .on_click(move |_, window, cx| {
@@ -240,7 +305,7 @@ pub fn chevron(_up: bool) -> impl IntoElement {
         .size(px(6.0))
         .border_t_1()
         .border_r_1()
-        .border_color(theme::TEXT_FAINT)
+        .border_color(theme::text_faint())
 }
 
 /// Convenience: a labelled stat row used in the inspector.

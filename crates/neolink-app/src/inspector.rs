@@ -3,7 +3,7 @@
 use crate::theme;
 use crate::ui;
 use gpui::prelude::*;
-use gpui::{div, px, Context};
+use gpui::{div, px, svg, Context};
 
 impl crate::Neolink {
     pub(crate) fn inspector(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -27,13 +27,13 @@ impl crate::Neolink {
                         .child(
                             div()
                                 .text_sm()
-                                .text_color(theme::TEXT_DIM)
+                                .text_color(theme::text_dim())
                                 .child("Select a display"),
                         )
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(theme::TEXT_FAINT)
+                                .text_color(theme::text_faint())
                                 .child("to configure it"),
                         ),
                 )
@@ -61,6 +61,10 @@ impl crate::Neolink {
                     .items_center()
                     .gap_2()
                     .pb_1()
+                    .children(
+                        ui::brand_logo(&item.name)
+                            .map(|path| svg().path(path).w(px(30.0)).h(px(18.0)).flex_none()),
+                    )
                     .child(ui::dot(swatch))
                     .child(
                         div()
@@ -101,7 +105,7 @@ impl crate::Neolink {
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme::TEXT_FAINT)
+                        .text_color(theme::text_faint())
                         .child("DISPLAYLINK"),
                 )
                 .child(ui::stat(
@@ -188,7 +192,7 @@ impl crate::Neolink {
                 div()
                     .flex_none()
                     .text_xs()
-                    .text_color(theme::TEXT_FAINT)
+                    .text_color(theme::text_faint())
                     .child("MODE"),
             );
 
@@ -219,10 +223,10 @@ impl crate::Neolink {
                     .text_color(if active {
                         theme::ACCENT
                     } else {
-                        theme::TEXT_DIM
+                        theme::text_dim()
                     })
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme::GLASS_SOFT).text_color(theme::TEXT))
+                    .hover(|s| s.bg(theme::glass_soft()).text_color(theme::text()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Err(e) = this.state.set_mode(index, m.id) {
                             this.state.status = format!("Mode change failed: {e}");
@@ -242,7 +246,7 @@ impl crate::Neolink {
             .gap_2()
             .pt_2()
             .border_t_1()
-            .border_color(theme::HAIRLINE_SOFT)
+            .border_color(theme::hairline_soft())
             .child(
                 div()
                     .flex()
@@ -281,7 +285,7 @@ impl crate::Neolink {
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(theme::TEXT_DIM)
+                                .text_color(theme::text_dim())
                                 .child("HiDPI backing"),
                         )
                         .child(ui::toggle("toggle-hidpi", cfg.hidpi).on_click(cx.listener(
@@ -303,7 +307,7 @@ impl crate::Neolink {
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(theme::TEXT_DIM)
+                                .text_color(theme::text_dim())
                                 .child("Rotation"),
                         )
                         .child(div().flex().gap_1().children(
@@ -343,7 +347,12 @@ impl crate::Neolink {
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(div().text_xs().text_color(theme::TEXT_DIM).child("Mirror"))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::text_dim())
+                                .child("Mirror"),
+                        )
                         .child(
                             div()
                                 .flex()
