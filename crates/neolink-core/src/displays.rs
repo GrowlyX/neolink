@@ -37,6 +37,9 @@ type CFArrayRef = *const c_void;
 type CFDictionaryRef = *const c_void;
 type CFUUIDRef = *const c_void;
 type CFStringRef = *const c_void;
+type CGImageRef = *const c_void;
+type CGDataProviderRef = *const c_void;
+type CFDataRef = *const c_void;
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -82,6 +85,15 @@ extern "C" {
     ) -> i32;
     fn CGPreflightScreenCaptureAccess() -> bool;
     fn CGRequestScreenCaptureAccess() -> bool;
+    fn CGDisplayCreateImage(d: DisplayId) -> CGImageRef;
+    fn CGImageGetWidth(img: CGImageRef) -> usize;
+    fn CGImageGetHeight(img: CGImageRef) -> usize;
+    fn CGImageGetBytesPerRow(img: CGImageRef) -> usize;
+    fn CGImageGetDataProvider(img: CGImageRef) -> CGDataProviderRef;
+    fn CGImageRelease(img: CGImageRef);
+    fn CGDataProviderCopyData(p: CGDataProviderRef) -> CFDataRef;
+    fn CFDataGetBytePtr(d: CFDataRef) -> *const u8;
+    fn CFDataGetLength(d: CFDataRef) -> isize;
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -445,4 +457,53 @@ pub fn screen_capture_allowed() -> bool {
 
 pub fn request_screen_capture() -> bool {
     unsafe { CGRequestScreenCaptureAccess() }
+}
+
+/// One captured frame of a display, already in the byte order the DL3 tile
+/// sender wants (BGRA, 4 bytes per pixel).
+pub struct Grab {
+    pub width: usize,
+    pub height: usize,
+    pub stride: usize,
+    pub pixels: Vec<u8>,
+}
+
+/// Capture a display with `CGDisplayCreateImage`.
+///
+/// BGRA is what CoreGraphics produces for a screen image on Apple silicon and
+/// what `Transport::frame` ships, so the bytes are copied out unchanged. Returns
+/// `None` when the display is asleep, has no image, or screen recording has not
+/// been granted.
+pub fn grab(id: DisplayId) -> Option<Grab> {
+    unsafe {
+        let img = CGDisplayCreateImage(id);
+        if img.is_null() {
+            return None;
+        }
+        let width = CGImageGetWidth(img);
+        let height = CGImageGetHeight(img);
+        let stride = CGImageGetBytesPerRow(img);
+        let provider = CGImageGetDataProvider(img);
+        let data = if provider.is_null() {
+            std::ptr::null()
+        } else {
+            CGDataProviderCopyData(provider)
+        };
+        let mut pixels = Vec::new();
+        if !data.is_null() {
+            let len = CFDataGetLength(data).max(0) as usize;
+            let bytes = CFDataGetBytePtr(data);
+            if !bytes.is_null() && len > 0 {
+                pixels.extend_from_slice(std::slice::from_raw_parts(bytes, len));
+            }
+            CFRelease(data);
+        }
+        CGImageRelease(img);
+        (width > 0 && height > 0 && !pixels.is_empty()).then_some(Grab {
+            width,
+            height,
+            stride,
+            pixels,
+        })
+    }
 }

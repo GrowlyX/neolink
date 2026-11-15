@@ -1,6 +1,9 @@
 pub mod agent;
+pub mod diff;
+pub mod dfu;
 pub mod displays;
 pub mod dl3;
+pub mod hdcp;
 pub mod layout;
 pub mod loginitem;
 pub mod spkg;

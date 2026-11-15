@@ -14,6 +14,14 @@ objc2-foundation = "0.3"
 block2 = "0.6"
 core-foundation = "0.10"
 libc = "0.2"
+rsa = "0.9.10"
+sha2 = { version = "0.10.9", features = ["oid"] }
+hmac = "0.12.1"
+aes = "0.8.4"
+cbc = "0.1.2"
+subtle = "2.6.1"
+zeroize = "1.8.2"
+rand = "0.8.5"
 
 [build-dependencies]
 cc = "1"

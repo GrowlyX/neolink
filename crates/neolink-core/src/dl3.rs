@@ -1,36 +1,49 @@
 //! DL3 wire format, recovered from `DisplayLinkUserAgent` 17.1.56 (arm64).
 //!
-//! The transport is a bulk pipe carrying 12-byte base headers. The builder at
-//! `0x1001273c8` composes them from a mode/fragment table; the validator at
-//! `0x100103148` rejects anything whose first byte is neither `0x01` (channel
-//! tagged) nor `0x40` (unconditional TRANS) or whose length exceeds the
-//! negotiated maximum. Every packet is therefore a fragment of a tile update.
+//! The transport is a bulk pipe carrying 20-byte headers. The builder at
+//! `0x1001270bc` / `0x1001271d4` / `0x1001273c8` composes them from a queue of
+//! damage rectangles; the validator at `0x100103148` accepts only tag `0x01`
+//! (channel probe, byte 1 must equal the negotiated channel) or `0x40`
+//! (unconditional TRANS) and rejects a length above the negotiated maximum
+//! (`Invalid TG length.`). The builder hands exactly 20 bytes to the pipe, so
+//! header and payload are contiguous on the wire.
 //!
 //! ```text
 //! off  size  field
-//!  0    1    opcode<<5 | flags
-//!  1    1    fragment index
-//!  2    2    payload length (little endian)
-//!  4    1    flags: last<<4 | first<<2 | reserved
-//!  5    1    sequence
-//!  6    2    reserved
-//!  8    2    tile x
-//! 10    2    tile y
+//!  0    1    tag: 0x01 probe | op<<5 | last<<4 | cont<<3 | first<<2 | stream
+//!  1    1    channel (probe only, else 0)
+//!  2    2    payload length (big endian)
+//!  4    1    same tag byte as offset 0
+//!  5    1    fragment index, 1-based, bumped per continued fragment
+//!  6    2    packet counter (little endian, wraps)
+//!  8    1    tile rect x      (16-pixel units)
+//!  9    1    tile rect y
+//! 10    1    tile rect x_end
+//! 11    1    tile rect y_end
+//! 12    4    fragment offset within the rectangle (little endian)
+//! 16    4    frame tag carried through from the caller
 //! --- payload ---
 //! ```
 //!
-//! Tile coordinates are in 16-pixel units. The vendor also emits a 20-byte
-//! "frame section" (`header[0..16]` plus a trailing u32 that is zero on the last
-//! fragment of a frame) which is what the receiver echoes back.
+//! The rectangle is inclusive: the builder writes `x>>4` and `(x+w+0xf)>>4`, so
+//! one packet describes the whole damaged span and the receiver walks it. The
+//! `first` bit is set only while the fragment index is still 0 (first packet of
+//! a frame); `last` is set when the fragment offset is back at zero, i.e. on the
+//! first packet of each rectangle. A continuation packet sets `cont` and moves
+//! the previous rect's `x_end` into `x` so the receiver resumes mid-row.
+//!
+//! Status replies (`StatusOp`) never reach the ring: `MonitorStatus` carries a
+//! `u16` checksum over the body and is validated before use (`0x10026c668`).
 
 use anyhow::{bail, Result};
 
-/// Header length for every packet. The builder hard-codes 12, then appends the
-/// 8-byte frame section only for the debug echo.
-pub const HEADER_LEN: usize = 12;
+/// Header length for every packet. The builder copies exactly this many bytes
+/// (a 16-byte `ldur`/`stur` pair plus a `u32`) out of its 20-byte staging
+/// buffer before handing the buffer to the transport.
+pub const HEADER_LEN: usize = 20;
 /// Largest status payload: a full 512-byte EDID read.
 pub const MAX_STATUS: usize = 512;
-/// Tile granularity used by the fragmenter.
+/// Tile granularity used by the fragmenter; rectangle ends round up to it.
 pub const TILE: usize = 16;
 
 /// Bulk message opcodes (top three bits of byte 0).
@@ -58,6 +71,10 @@ impl Op {
 }
 
 /// Control requests handled by `monitor_status` (`0x10028e42c`).
+///
+/// `Mode` takes an optional byte argument at `data[1]`, `Attributes` a `u16`
+/// argument (the vendor passes `arg & 0xffff`). Both reply through the normal
+/// status envelope with the additive checksum.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum StatusOp {
@@ -67,7 +84,116 @@ pub enum StatusOp {
     Attributes = 0x06,
 }
 
-/// A parsed packet header. Parsing never allocates and never trusts the length.
+/// HDCP 2.x message ids, in the order the vendor enumerates them
+/// (`Unknown HDCP2 message id` is the bounds check).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HdcpMessage {
+    Null,
+    AkeInit,
+    AkeSendCert,
+    AkeNoStoredKm,
+    AkeStoredKm,
+    AkeSendRrx,
+    AkeSendHPrime,
+    AkeSendPairingInfo,
+    LcInit,
+    LcSendLPrime,
+    SkeSendEks,
+    RepeaterAuthSendReceiverIdList,
+    RttReady,
+    RttChallenge,
+    RepeaterAuthSendAck,
+    RepeaterAuthStreamManage,
+    RepeaterAuthStreamReady,
+    ReceiverAuthStatus,
+    AkeTransmitterInfo,
+    AkeReceiverInfo,
+}
+
+impl HdcpMessage {
+    /// Wire id. The vendor lists these consecutively starting after the
+    /// `Unknown HDCP2 message id ` bound, so ids are the enumeration order.
+    pub fn id(self) -> u8 {
+        self as u8
+    }
+
+    pub fn name(id: u8) -> &'static str {
+        match id {
+            0 => "HDCP2_NULL_MESSAGE",
+            1 => "HDCP2_AKE_INIT_MESSAGE",
+            2 => "HDCP2_AKE_SEND_CERT_MESSAGE",
+            3 => "HDCP2_AKE_NO_STORED_KM_MESSAGE",
+            4 => "HDCP2_AKE_STORED_KM_MESSAGE",
+            5 => "HDCP2_AKE_SEND_RRX_MESSAGE",
+            6 => "HDCP2_AKE_SEND_H_PRIME_MESSAGE",
+            7 => "HDCP2_AKE_SEND_PAIRING_INFO_MESSAGE",
+            8 => "HDCP2_LC_INIT_MESSAGE",
+            9 => "HDCP2_LC_SEND_L_PRIME_MESSAGE",
+            10 => "HDCP2_SKE_SEND_EKS_MESSAGE",
+            11 => "HDCP2_REPEATERAUTH_SEND_RECEIVERID_LIST",
+            12 => "HDCP2_RTT_READY",
+            13 => "HDCP2_RTT_CHALLENGE",
+            14 => "HDCP2_REPEATERAUTH_SEND_ACK",
+            15 => "HDCP2_REPEATERAUTH_STREAM_MANAGE",
+            16 => "HDCP2_REPEATERAUTH_STREAM_READY",
+            17 => "HDCP2_RECEIVER_AUTHSTATUS",
+            18 => "HDCP2_AKE_TRANSMITTER_INFO",
+            19 => "HDCP2_AKE_RECEIVER_INFO",
+            _ => "<UNKNOWN_MESSAGE>",
+        }
+    }
+}
+
+/// Why a link is protected, as the sink reports it in `Attributes`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Protection {
+    NotRequired,
+    Required,
+    Unknown(u8),
+}
+
+impl Protection {
+    pub fn from_byte(b: u8) -> Self {
+        match b {
+            0 => Protection::NotRequired,
+            1 => Protection::Required,
+            other => Protection::Unknown(other),
+        }
+    }
+}
+
+/// A parsed `Attributes` (`STATUS_OP_ATTRIBUTES`) reply: the sink's protection
+/// state and its HDCP revision/monitor capability word.
+///
+/// The vendor prints the raw words as `Protection Type: <n>` /
+/// `Monitor Supports Protection: <n>` and compares the revision against the
+/// HDCP 2.2 threshold before it will start repeater auth. The exact bit
+/// positions are only partly pinned, so [`Attributes`] keeps the raw body
+/// alongside the decoded revision and protection so a capture can settle them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Attributes {
+    pub protection: Protection,
+    /// HDCP revision the sink reports (0x22 = HDCP 2.2). `None` when the reply
+    /// was too short to carry one.
+    pub revision: Option<u8>,
+    pub hdcp22: bool,
+    pub raw: Vec<u8>,
+}
+
+impl Attributes {
+    pub fn parse(body: &[u8]) -> Self {
+        let protection = Protection::from_byte(body.first().copied().unwrap_or(0));
+        let revision = body.get(2).copied();
+        Self {
+            protection,
+            revision,
+            hdcp22: revision == Some(0x22),
+            raw: body.to_vec(),
+        }
+    }
+}
+
+/// A packet header. Parsing never allocates and never trusts the length.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Header {
     pub op: Op,
@@ -75,22 +201,38 @@ pub struct Header {
     pub len: u16,
     pub first: bool,
     pub last: bool,
-    pub seq: u8,
-    pub tile_x: u16,
-    pub tile_y: u16,
+    pub cont: bool,
+    /// Low two tag bits, carried over from the previous packet of the burst.
+    pub stream: u8,
+    /// 1-based fragment index; 0 on the first packet of a frame.
+    pub frag: u8,
+    pub counter: u16,
+    pub tile_x: u8,
+    pub tile_y: u8,
+    pub tile_x_end: u8,
+    pub tile_y_end: u8,
+    pub offset: u32,
+    pub frame: u32,
 }
 
 impl Header {
-    pub fn new(op: Op, seq: u8, len: u16) -> Self {
+    pub fn new(op: Op, len: u16) -> Self {
         Self {
             op,
             channel: 0,
             len,
             first: true,
             last: true,
-            seq,
+            cont: false,
+            stream: 0,
+            frag: 0,
+            counter: 0,
             tile_x: 0,
             tile_y: 0,
+            tile_x_end: 0,
+            tile_y_end: 0,
+            offset: 0,
+            frame: 0,
         }
     }
 
@@ -100,37 +242,59 @@ impl Header {
         Self {
             op: Op::Nop,
             channel,
-            len: 0,
-            first: true,
-            last: true,
-            seq: 0,
-            tile_x: 0,
-            tile_y: 0,
+            ..Self::new(Op::Nop, 0)
         }
     }
 
-    pub fn flags(&self) -> u8 {
-        (self.last as u8) << 4 | (self.first as u8) << 2
+    pub fn is_probe(&self) -> bool {
+        self.op == Op::Nop && self.channel != 0
     }
 
-    /// Byte 0 as validated by the agent: `0x01` probe, otherwise `op<<5`.
+    /// Byte 0 as validated by the agent: `0x01` probe, otherwise `op<<5` plus
+    /// the flag bits.
     pub fn tag(&self) -> u8 {
-        if self.op == Op::Nop && self.channel != 0 {
+        if self.is_probe() {
             0x01
         } else {
-            (self.op as u8) | self.flags()
+            (self.op as u8)
+                | (self.last as u8) << 4
+                | (self.cont as u8) << 3
+                | (self.first as u8) << 2
+                | (self.stream & 0x03)
         }
+    }
+
+    /// Set the inclusive tile rectangle that covers `w`x`h` pixels at `x`,`y`.
+    pub fn set_rect(&mut self, x: u16, y: u16, w: u16, h: u16) {
+        self.tile_x = (x / TILE as u16) as u8;
+        self.tile_y = (y / TILE as u16) as u8;
+        // The vendor rounds with `+ 0xf` then `>>4`, so the end is exclusive.
+        self.tile_x_end = (x + w).div_ceil(TILE as u16) as u8;
+        self.tile_y_end = (y + h).div_ceil(TILE as u16) as u8;
+    }
+
+    /// Pixel span the rect covers, in tiles.
+    pub fn rect_tiles(&self) -> (u16, u16, u16, u16) {
+        let x = self.tile_x as u16;
+        let y = self.tile_y as u16;
+        (
+            x,
+            y,
+            (self.tile_x_end as u16).saturating_sub(x),
+            (self.tile_y_end as u16).saturating_sub(y),
+        )
     }
 
     pub fn write(&self, out: &mut Vec<u8>) {
         out.push(self.tag());
-        out.push(if self.tag() == 0x01 { self.channel } else { 0 });
-        out.extend_from_slice(&self.len.to_le_bytes());
-        out.push(if self.tag() == 0x01 { 0 } else { self.flags() });
-        out.push(self.seq);
-        out.extend_from_slice(&[0, 0]);
-        out.extend_from_slice(&self.tile_x.to_le_bytes());
-        out.extend_from_slice(&self.tile_y.to_le_bytes());
+        out.push(if self.is_probe() { self.channel } else { 0 });
+        out.extend_from_slice(&self.len.to_be_bytes());
+        out.push(self.tag());
+        out.push(self.frag);
+        out.extend_from_slice(&self.counter.to_le_bytes());
+        out.extend_from_slice(&[self.tile_x, self.tile_y, self.tile_x_end, self.tile_y_end]);
+        out.extend_from_slice(&self.offset.to_le_bytes());
+        out.extend_from_slice(&self.frame.to_le_bytes());
     }
 }
 
@@ -143,8 +307,8 @@ pub fn parse(buf: &[u8]) -> Result<(Header, &[u8])> {
         0x01 => Op::Nop,
         other => Op::from_byte(other).ok_or_else(|| anyhow::anyhow!("invalid TG header"))?,
     };
-    let channel = if tag == 0x01 { buf[1] } else { 0 };
-    let len = u16::from_le_bytes([buf[2], buf[3]]);
+    let probe = tag == 0x01;
+    let len = u16::from_be_bytes([buf[2], buf[3]]);
     let payload = &buf[HEADER_LEN..];
     if payload.len() < len as usize {
         bail!(
@@ -153,17 +317,24 @@ pub fn parse(buf: &[u8]) -> Result<(Header, &[u8])> {
             payload.len()
         );
     }
-    let flags = if tag == 0x01 { 0 } else { buf[4] };
+    let flags = if probe { 0 } else { buf[0] };
     Ok((
         Header {
             op,
-            channel,
+            channel: if probe { buf[1] } else { 0 },
             len,
             first: flags & 0x04 != 0,
             last: flags & 0x10 != 0,
-            seq: buf[5],
-            tile_x: u16::from_le_bytes([buf[8], buf[9]]),
-            tile_y: u16::from_le_bytes([buf[10], buf[11]]),
+            cont: flags & 0x08 != 0,
+            stream: flags & 0x03,
+            frag: buf[5],
+            counter: u16::from_le_bytes([buf[6], buf[7]]),
+            tile_x: buf[8],
+            tile_y: buf[9],
+            tile_x_end: buf[10],
+            tile_y_end: buf[11],
+            offset: u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]),
+            frame: u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]),
         },
         &payload[..len as usize],
     ))
@@ -175,34 +346,35 @@ pub fn checksum(data: &[u8]) -> u16 {
     data.iter().fold(0u16, |acc, b| acc.wrapping_add(*b as u16))
 }
 
-/// Split a frame into tile fragments. `chunk` bounds the payload per packet so
-/// the result also fits the endpoint's negotiated max packet size.
-pub fn fragment(seq: &mut u8, x: u16, y: u16, w: u16, h: u16, chunk: usize) -> Vec<Header> {
+/// Split a damage rectangle into packets. `chunk` bounds the payload per packet
+/// so the result also fits the endpoint's negotiated max packet size.
+///
+/// Every packet repeats the whole rectangle; the `offset` field says where its
+/// payload starts inside the rectangle, and a packet past the first sets
+/// `cont`. The builder moves the previous rect's first column to the column it
+/// resumed on (`0x1001271d4`), so the rect start tracks the offset too.
+pub fn fragment(x: u16, y: u16, w: u16, h: u16, chunk: usize) -> Vec<Header> {
+    const BPP: usize = 4;
+    let total = w as usize * h as usize * BPP;
     let mut out = Vec::new();
-    let mut frag_index = 0u8;
-    let mut ty = y;
-    while ty < y.saturating_add(h) {
-        let mut tx = x;
-        while tx < x.saturating_add(w) {
-            *seq = seq.wrapping_add(1);
-            let mut head = Header::new(Op::Data, *seq, 0);
-            head.first = frag_index == 0;
-            head.tile_x = tx / TILE as u16;
-            head.tile_y = ty / TILE as u16;
-            head.len = chunk.min(MAX_STATUS) as u16;
-            frag_index = frag_index.wrapping_add(1);
-            out.push(head);
-            tx = tx.saturating_add(TILE as u16);
-        }
-        ty = ty.saturating_add(TILE as u16);
-    }
-    if let Some(last) = out.last_mut() {
-        last.last = true;
-    }
-    let n = out.len();
-    for (i, h) in out.iter_mut().enumerate() {
-        h.first = i == 0;
-        h.last = i + 1 == n;
+    let mut counter = 0u16;
+    let mut done = 0usize;
+    while done < total.max(1) {
+        let take = (total - done).min(chunk.max(1));
+        let mut head = Header::new(Op::Data, take as u16);
+        head.set_rect(x, y, w, h);
+        head.first = done == 0;
+        // `last` marks a packet that begins a rectangle (offset back at zero),
+        // not the end of the frame: the builder sets it from the offset, and a
+        // continuation clears it.
+        head.last = done == 0;
+        head.cont = done != 0;
+        head.frag = out.len().min(u8::MAX as usize) as u8;
+        head.offset = done as u32;
+        head.counter = counter;
+        counter = counter.wrapping_add(1);
+        out.push(head);
+        done += take;
     }
     out
 }
@@ -314,6 +486,30 @@ pub fn template_edid(width_mm: u16, height_mm: u16, name: &str) -> Vec<u8> {
 
 /// One 18-byte detailed timing descriptor. Blanking follows the CEA-861 1080p60 numbers scaled
 /// to the pixel clock so any caller size stays arithmetically consistent.
+/// A dock-specific EDID block.
+///
+/// The vendor keeps one block per dock family; we cannot redistributable-copy
+/// theirs, so the identity is derived from the family name and revision the
+/// pack declares instead. The product code, serial and monitor name all hash
+/// from that string, so each dock family presents a stable, distinct identity
+/// and two docks never collide in the arrangement profile.
+pub fn dock_edid(family: &str, width_mm: u16, height_mm: u16) -> Vec<u8> {
+    let mut e = template_edid(width_mm, height_mm, family);
+    let h = fnv1a(family.as_bytes());
+    // Product code + serial: deterministic per family, and distinct from the
+    // fixed 0x0001 the generic template uses.
+    e[10..12].copy_from_slice(&((h >> 32) as u16).max(0x0100).to_be_bytes());
+    e[12..16].copy_from_slice(&(h as u32).to_be_bytes());
+    fix_edid_checksum(&mut e);
+    e
+}
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf29ce484222325u64, |h, b| {
+        (h ^ *b as u64).wrapping_mul(0x100000001b3)
+    })
+}
+
 fn detailed_timing(w: u16, h: u16) -> [u8; 18] {
     let hactive = w.min(4095);
     let vactive = h.min(4095);
@@ -371,45 +567,76 @@ mod tests {
 
     #[test]
     fn data_header_flags() {
-        let mut head = Header::new(Op::Data, 9, 32);
+        let mut head = Header::new(Op::Data, 32);
         head.first = true;
         head.last = false;
-        head.tile_x = 4;
-        head.tile_y = 2;
+        head.set_rect(64, 32, 32, 16);
         let mut buf = Vec::new();
         head.write(&mut buf);
         buf.extend_from_slice(&[0x5a; 32]);
         assert_eq!(buf[0], 0x80 | 0x04);
-        assert_eq!(&buf[..HEADER_LEN].len(), &HEADER_LEN);
-        let (back, _) = parse(&buf).unwrap();
+        assert_eq!(buf.len(), HEADER_LEN + 32);
+        let (back, payload) = parse(&buf).unwrap();
         assert_eq!(back.op, Op::Data);
         assert!(back.first && !back.last);
         assert_eq!((back.tile_x, back.tile_y), (4, 2));
-        assert_eq!(back.seq, 9);
+        assert_eq!((back.tile_x_end, back.tile_y_end), (6, 3));
+        assert_eq!(payload, &[0x5a; 32]);
+    }
+
+    #[test]
+    fn length_is_big_endian_and_flagged() {
+        let mut head = Header::new(Op::Data, 0x1234);
+        let mut buf = Vec::new();
+        head.write(&mut buf);
+        assert_eq!(&buf[2..4], &[0x12, 0x34]);
+        // The tag byte is repeated at offset 4 so the link can sanity check the
+        // staging buffer without re-deriving it.
+        assert_eq!(buf[0], buf[4]);
+        head.len = 1;
+        head.stream = 0b10;
+        head.cont = true;
+        assert_eq!(head.tag() & 0x0b, 0x0a);
     }
 
     #[test]
     fn rejects_short_and_overlong() {
         assert!(parse(&[0x40, 0]).is_err());
         let mut buf = Vec::new();
-        Header::new(Op::Data, 0, 64).write(&mut buf);
+        Header::new(Op::Data, 64).write(&mut buf);
         assert!(parse(&buf).is_err());
         buf.extend_from_slice(&[0; 64]);
         assert!(parse(&buf).is_ok());
         let mut bad = vec![0x05u8; HEADER_LEN];
         bad[2] = 0;
+        bad[3] = 5;
         assert!(parse(&bad).is_err());
     }
 
     #[test]
-    fn fragment_marks_first_and_last() {
-        let mut seq = 0;
-        let heads = fragment(&mut seq, 0, 0, 48, 32, 1024);
-        assert_eq!(heads.len(), 6);
-        assert!(heads[0].first && !heads[0].last);
-        assert!(heads.last().unwrap().last && !heads.last().unwrap().first);
-        assert_eq!(heads[1].seq, heads[0].seq + 1);
-        assert_eq!(heads[3].tile_y, 1);
+    fn fragment_rows_carry_one_inclusive_rect() {
+        // 48x32 is 6144 bytes; a 2048-byte chunk splits it into three.
+        let heads = fragment(16, 0, 48, 32, 2048);
+        assert_eq!(heads.len(), 3);
+        assert!(heads[0].first && !heads[1].first);
+        assert!(!heads[0].cont && heads[1].cont);
+        assert_eq!(heads[1].offset, 2048);
+        assert_eq!(heads[2].len, 2048);
+        assert_eq!((heads[0].tile_x, heads[0].tile_x_end), (1, 4));
+        assert_eq!(heads[0].rect_tiles(), (1, 0, 3, 2));
+        assert_eq!(heads[1].counter, heads[0].counter + 1);
+    }
+
+    #[test]
+    fn fragment_ids_number_the_continuations() {
+        let heads = fragment(0, 0, 16, 16, 40);
+        assert_eq!(heads.len(), 26);
+        assert_eq!(heads.iter().filter(|h| h.first).count(), 1);
+        assert!(heads[0].frag == 0 && heads[1].frag == 1 && heads[2].frag == 2);
+        // `last` marks a packet that starts at rect offset 0, i.e. the first
+        // packet of each rectangle, not the end of the frame.
+        assert!(heads[0].last && !heads[1].last);
+        assert!(!heads[0].cont && heads[1].cont);
     }
 
     #[test]
@@ -437,6 +664,31 @@ mod tests {
             d
         });
         assert_eq!(e[126], 0, "no extensions");
+    }
+
+    #[test]
+    fn dock_edid_is_stable_and_family_specific() {
+        let a = dock_edid("EllaDock", 500, 300);
+        let b = dock_edid("EllaDock", 500, 300);
+        let c = dock_edid("RidgeDoc", 500, 300);
+        assert_eq!(a, b);
+        assert_ne!(a[10..16], c[10..16]);
+        assert!(valid_edid(&a));
+        assert_eq!(checksum(&a) as u8, 0);
+        assert_eq!(&a[77..85], b"EllaDock");
+    }
+
+    #[test]
+    fn attributes_decode_reports_hdcp22() {
+        let a = Attributes::parse(&[1, 0, 0x22, 0, 1, 1]);
+        assert_eq!(a.protection, Protection::Required);
+        assert!(a.hdcp22);
+        assert!(!Attributes::parse(&[0, 0, 0x14]).hdcp22);
+        assert_eq!(
+            HdcpMessage::name(0xb),
+            "HDCP2_REPEATERAUTH_SEND_RECEIVERID_LIST"
+        );
+        assert_eq!(HdcpMessage::name(200), "<UNKNOWN_MESSAGE>");
     }
 
     #[test]

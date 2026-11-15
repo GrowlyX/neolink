@@ -6,7 +6,8 @@
 use anyhow::Context;
 use anyhow::Result;
 use neolink_core::{
-    agent, displays, dl3, layout, loginitem, spkg, transport, vendor, virtual_display,
+    agent, diff::DirtyTracker, displays, dl3, dfu, layout, loginitem, spkg, transport, vendor,
+    virtual_display,
 };
 use std::time::Duration;
 
@@ -21,13 +22,21 @@ fn usage() -> ! {
          \x20 neolinkctl usb               list DisplayLink adapters\n\
          \x20 neolinkctl edid [--out F] [--template]\n\
          \x20 neolinkctl edid-write F     write an EDID block to the dock\n\
+         \x20 neolinkctl hdcp              report protection state / HDCP 2.2\n\
          \x20 neolinkctl agent start|stop|restart\n\
          \x20 neolinkctl vendor status|cache|fetch|expand|install|provision|packs|purge\n\
          \x20 neolinkctl pack F            parse a vendor .spkg and list its frames\n\
          \x20 neolinkctl pack F --out D   write F's firmware image to D\n\
-         \x20 neolinkctl login on|off|status\n"
+         \x20 neolinkctl flash F [--force]  DFU-flash a .spkg/.fullrom to the dock\n\
+         \x20 neolinkctl frame [ID] [N]   capture a display and ship N frames\n\
+         \x20 neolinkctl login on|off|status\n\
+         \x20 neolinkctl loginscreen on|off|status\n"
     );
     std::process::exit(2)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn progress(stage: vendor::Stage, done: u64, total: u64) {
@@ -172,6 +181,11 @@ fn main() -> Result<()> {
             let mut t = transport::Transport::open()?;
             let edid = if std::env::args().any(|a| a == "--template") {
                 dl3::template_edid(600, 340, "Neolink Display")
+            } else if let Some(family) = std::env::args()
+                .nth(3)
+                .filter(|_| std::env::args().nth(2).as_deref() == Some("--dock"))
+            {
+                dl3::dock_edid(&family, 600, 340)
             } else {
                 t.edid_or_template(600, 340, "Neolink Display")
             };
@@ -194,6 +208,73 @@ fn main() -> Result<()> {
                         dl3::valid_edid(&edid)
                     );
                 }
+            }
+        }
+        Some("flash") => {
+            let path = std::env::args()
+                .nth(2)
+                .context("flash <firmware.spkg|.fullrom> [--force]")?;
+            let force = std::env::args().any(|a| a == "--force");
+            let fw = dfu::Firmware::parse(&std::fs::read(&path)?)?;
+            let dev = dfu::Device::open_matching(|_| true)?;
+            let desc = dev.descriptor()?;
+            println!(
+                "dock        {}",
+                dev.desc.bus_id
+            );
+            println!(
+                "firmware    customer/board {:#08x} id {:#018x}",
+                desc.customer_board(),
+                desc.firmware_id()
+            );
+            println!("image       {} bytes", fw.len());
+            let functional = dev.functional();
+            match &functional {
+                Some(f) => println!("block size  {} (from descriptor)", f.block),
+                None => println!("block size  {} (default, none readable)", dfu::DEFAULT_BLOCK),
+            }
+            if !force {
+                let mut t = transport::Transport::open_matching(|d| d.bus_id == dev.desc.bus_id)?;
+                let a = t.attributes()?;
+                println!(
+                    "protection  {:?} (hdcp {})",
+                    a.protection,
+                    if a.hdcp22 { "2.2" } else { "?" }
+                );
+            }
+            let mut last = 0usize;
+            let mut cb = |sent: usize, total: usize| {
+                if sent == total || sent - last >= 512 * 1024 {
+                    last = sent;
+                    eprint!("\r{sent} / {total} bytes");
+                    if sent == total {
+                        eprintln!();
+                    }
+                }
+            };
+            let mut session = dev
+                .session(functional.as_ref())
+                .with_progress(&mut cb);
+            let sent = session.flash(&fw)?;
+            println!("Firmware sent ({sent} bytes)");
+            println!("The dock re-enumerates; power-cycle it if it does not come back.");
+        }
+        Some("hdcp") => {
+            let mut t = transport::Transport::open()?;
+            let a = t.attributes()?;
+            println!("dock        {}", t.desc.bus_id);
+            println!("protection  {:?}", a.protection);
+            println!(
+                "hdcp        {}",
+                match a.revision {
+                    Some(r) => format!("{r:#04x}"),
+                    None => "unknown".into(),
+                }
+            );
+            println!("hdcp 2.2    {}", if a.hdcp22 { "yes" } else { "no" });
+            println!("raw         {}", hex(&a.raw));
+            for id in 0u8..20 {
+                println!("  {id:2}  {}", transport::Transport::hdcp_name(id));
             }
         }
         Some("edid-write") => {
@@ -247,6 +328,61 @@ fn main() -> Result<()> {
                 println!("wrote {} bytes to {}", image.len(), out.display());
             }
         }
+        Some("frame") => {
+            let want = std::env::args().nth(2).and_then(|a| a.parse::<u32>().ok());
+            let count = std::env::args()
+                .nth(3)
+                .and_then(|a| a.parse::<usize>().ok())
+                .unwrap_or(1);
+            let id = match want {
+                Some(id) => id,
+                None => displays::list()
+                    .into_iter()
+                    .find(|d| d.main)
+                    .map(|d| d.id)
+                    .context("no main display")?,
+            };
+            let mut t = transport::Transport::open()?;
+            println!("dock {} max payload {} bytes", t.desc.bus_id, t.max_payload);
+            let mut tracker: Option<DirtyTracker> = None;
+            let mut full_bytes = 0usize;
+            let mut diff_bytes = 0usize;
+            for i in 0..count {
+                let g = displays::grab(id).context("display returned no image")?;
+                let started = std::time::Instant::now();
+                let stale = tracker.as_ref().is_none_or(|tr| {
+                    tr.width() != g.width as u32 || tr.height() != g.height as u32
+                });
+                if stale {
+                    tracker = Some(DirtyTracker::new(g.width as u32, g.height as u32));
+                }
+                let tr = tracker.as_mut().expect("tracker was just created");
+                let (damage, sent) = t.frame_dirty(tr, g.stride, &g.pixels)?;
+                let raw = g.stride * g.height;
+                full_bytes += raw;
+                diff_bytes += sent;
+                println!(
+                    "frame {i}: {}x{} {} of {} tiles dirty -> {} rects -> {} of {} bytes USB in {:?}",
+                    g.width,
+                    g.height,
+                    damage.dirty_tiles,
+                    tr.width().div_ceil(16) * tr.height().div_ceil(16),
+                    damage.rects.len(),
+                    sent,
+                    raw,
+                    started.elapsed()
+                );
+            }
+            if count > 1 && full_bytes > 0 {
+                println!(
+                    "{} frames: {} bytes raw -> {} bytes on the wire ({:.1}% saved)",
+                    count,
+                    full_bytes,
+                    diff_bytes,
+                    100.0 * (1.0 - diff_bytes as f64 / full_bytes as f64)
+                );
+            }
+        }
         Some("vendor") => vendor_cmd(std::env::args().nth(2).as_deref())?,
         Some("login") => match std::env::args().nth(2).as_deref() {
             Some("on") => {
@@ -264,6 +400,17 @@ fn main() -> Result<()> {
                     .map(|p| format!(" ({})", p.display()))
                     .unwrap_or_default()
             ),
+        },
+        Some("loginscreen") => match std::env::args().nth(2).as_deref() {
+            Some("on") => {
+                loginitem::install_login_screen()?;
+                println!("enabled at the login window");
+            }
+            Some("off") => {
+                loginitem::remove_login_screen()?;
+                println!("disabled at the login window");
+            }
+            _ => println!("login window agent: {}", loginitem::login_screen_enabled()),
         },
         Some("probe") => {
             println!(

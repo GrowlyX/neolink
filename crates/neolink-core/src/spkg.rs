@@ -20,21 +20,22 @@
 //! fragments, each `u8 kind`, `u16 len`, then `len` bytes, closed by its own
 //! trailer.
 //!
-//! The stream itself is a run of frames, each `u8 kind`, `u16 len`, 7 scratch
-//! bytes, a 10-byte second preamble, then `len - 10` data bytes (`len` counts
-//! the preamble and the data).
+//! The stream itself is a run of frames: 9 header bytes, a big-endian `u16`
+//! total length that counts the whole frame, then the body. Byte 0 is
+//! per-frame (it differs on every frame of every pack), byte 1 is per-frame
+//! too, the rest of the header is opaque. The pack's `BC` field states the
+//! frame count, so trailing padding is never mistaken for a frame.
+//!
 //! The final frame of a pack is split: its tail lives in a record and the
-//! `FRAGMENTED_SPKG` path stitches it back on. `kind` is per-fragment data, not
-//! a type tag. The data bytes are stored, not compressed — libcompression's
-//! `COMPRESSION_ZLIB` accepts them but returns them verbatim, which is why a
-//! "successful decode" here is a copy.
+//! `FRAGMENTED_SPKG` path stitches it back on. The bodies are stored dock
+//! firmware, not compressed — the agent links no zlib, and the bytes stay at
+//! ~7.99 bits/byte with no EDID preamble in any pack.
 //!
 //! The parser is strict about the bounds the vendor checks and lenient about
 //! everything else, so a damaged pack errors clearly instead of half-reading.
 //!
-//! What is still unknown is what the reassembled bytes mean per dock: they are
-//! the firmware/EDID image the kext and device consume, not an EDID or archive
-//! we can read today. See `docs/RE-FINDINGS.md`.
+//! What is still unknown is the DFU framing the dock expects around those
+//! bodies, not the container. See `docs/RE-FINDINGS.md`.
 
 use anyhow::{bail, Result};
 use std::path::Path;
@@ -221,7 +222,14 @@ impl Pack {
     /// frame of a pack that is itself truncated, so it is reported, not an
     /// error.
     pub fn frames(&self) -> Result<Frames> {
-        let mut stream = self.stream();
+        // `stream()` already carries the record data at the end, so the walk
+        // only needs the head and the table tail up front; the records supply
+        // one truncated frame's continuation where it overruns.
+        let mut stream = {
+            let mut s = self.head.clone().unwrap_or_default();
+            s.extend_from_slice(&self.tail);
+            s
+        };
         let mut pending: Vec<u8> = self.records.iter().flat_map(Record::data).collect();
         let mut frames = Vec::new();
         let mut at = 0usize;
@@ -664,7 +672,6 @@ mod tests {
         let total = bytes.len() as u32;
         bytes[4..8].copy_from_slice(&total.to_le_bytes());
         let p = parse(&bytes).unwrap();
-        eprintln!("tlv={:?}", p.fields);
         let f = p.frames().unwrap();
         assert_eq!(f.frames.len(), 2);
         assert_eq!(f.data(), b"firstsecond".to_vec());
@@ -717,11 +724,33 @@ mod tests {
             assert!(f.frames.len() > 5, "{name}: only {} frames", f.frames.len());
             let data = f.data().len();
             assert!(data > 100_000, "{name}: only {data} data bytes");
-            // The last frame is split by the FRAGMENTED_SPKG path and the
-            // remainder is image payload, not frame framing, so a tail is
-            // expected rather than an exact end.
-            assert!(f.rest > 0, "{name}: no split tail");
-            assert!(f.rest < 65_536, "{name}: {} trailing bytes", f.rest);
+            // Every frame the pack walks must be a well-formed run of fragments
+            // built from record bytes when its own tail runs out.
+            // `BC` counts frames including a final one that a truncated pack
+            // may only start, so the walk is at most one short of it.
+            if let Some(n) = k.frame_count() {
+                assert!(
+                    f.frames.len() + 1 >= n && f.frames.len() <= n,
+                    "{name}: walked {} of {n} frames",
+                    f.frames.len()
+                );
+            }
+            // Byte 0 of each frame is per-frame, not a fixed tag: a constant
+            // here would mean the walk is landing on the wrong boundaries.
+            let distinct = f
+                .frames
+                .iter()
+                .map(|b| b[0])
+                .collect::<std::collections::BTreeSet<_>>()
+                .len();
+            assert!(
+                distinct > f.frames.len() / 2,
+                "{name}: frame bytes not distinct"
+            );
+            // Only a truncated final frame is allowed to be left over.
+            if f.rest > 0 {
+                assert!(f.rest < 65_536, "{name}: {} trailing bytes", f.rest);
+            }
         }
     }
 

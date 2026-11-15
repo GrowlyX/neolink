@@ -9,6 +9,7 @@
 //! Only one process may own an interface, so [`Transport::open`] fails with a
 //! clear message while the vendor agent holds the dock.
 
+use crate::diff::{Damage, DirtyTracker};
 use crate::dl3::{self, Header, Op, StatusOp};
 use anyhow::{anyhow, bail, Context, Result};
 use nusb::transfer::{Bulk, In, Out};
@@ -30,7 +31,7 @@ pub struct DeviceDesc {
     pub bus_id: String,
 }
 
-fn describe(info: &DeviceInfo) -> DeviceDesc {
+pub fn describe(info: &DeviceInfo) -> DeviceDesc {
     DeviceDesc {
         vendor_id: info.vendor_id(),
         product_id: info.product_id(),
@@ -103,8 +104,10 @@ pub struct Transport {
     eps: Endpoints,
     seq: u8,
     channel: u8,
+    counter: u16,
+    frame_no: u32,
     pub desc: DeviceDesc,
-    max_payload: usize,
+    pub max_payload: usize,
 }
 
 impl std::fmt::Debug for Transport {
@@ -157,6 +160,8 @@ impl Transport {
             eps,
             seq: 0,
             channel: 1,
+            counter: 0,
+            frame_no: 0,
             desc,
             max_payload,
         };
@@ -184,7 +189,7 @@ impl Transport {
             if attempt == RESET_ATTEMPTS / 2 {
                 let mut reset = Vec::new();
                 self.seq = self.seq.wrapping_add(1);
-                Header::new(Op::Reset, self.seq, 0).write(&mut reset);
+                Header::new(Op::Reset, 0).write(&mut reset);
                 self.write(&reset)?;
             }
         }
@@ -259,7 +264,7 @@ impl Transport {
         let body = dl3::status_body(op, arg, data);
         let mut packet = Vec::with_capacity(dl3::HEADER_LEN + body.len());
         self.seq = self.seq.wrapping_add(1);
-        Header::new(Op::Trans, self.seq, body.len() as u16).write(&mut packet);
+        Header::new(Op::Trans, body.len() as u16).write(&mut packet);
         packet.extend_from_slice(&body);
         self.write(&packet)?;
         let payload = self.read_message()?;
@@ -296,6 +301,26 @@ impl Transport {
         Ok(edid)
     }
 
+    /// HDCP/attributes status. `MonitorStatus` is what carries protection
+    /// state, the receiver's HDCP revision and its capability flags; the agent
+    /// validates the body's trailing checksum before trusting any of it, which
+    /// [`Transport::status`] already does for us.
+    pub fn attributes(&mut self) -> Result<dl3::Attributes> {
+        let body = self.status(StatusOp::Attributes, 0, &[0; 16])?;
+        Ok(dl3::Attributes::parse(&body))
+    }
+
+    /// True when the sink negotiated HDCP 2.2. The vendor logs
+    /// `repeater auth received but rx is not HDCP2.2` instead of proceeding.
+    pub fn hdcp22(&mut self) -> Result<bool> {
+        Ok(self.attributes()?.hdcp22)
+    }
+
+    /// Message name for an HDCP 2.x id, so a receiver log can be read.
+    pub fn hdcp_name(id: u8) -> &'static str {
+        dl3::HdcpMessage::name(id)
+    }
+
     pub fn write_edid(&mut self, edid: &[u8]) -> Result<()> {
         if !dl3::valid_edid(edid) {
             bail!("invalid length of raw EDID data");
@@ -303,27 +328,106 @@ impl Transport {
         self.status(StatusOp::Edid, 0, edid).map(|_| ())
     }
 
-    /// A full frame: tile the damage rectangle and ship each fragment.
+    /// Ship a damage rectangle as DL3 packets.
+    ///
+    /// `pixels` is BGRA, four bytes per pixel, laid out with `stride` bytes per
+    /// row; the rectangle is copied out tightly before it is cut, so `stride`
+    /// padding never reaches the wire. The header carries the inclusive tile
+    /// rectangle, and `offset` says where each packet's payload starts inside
+    /// it; a packet past the first sets `cont` and its rect starts on the tile
+    /// it resumes at, matching the vendor builder (`0x1001271d4`). `first` is
+    /// set on the first packet of the frame only and `last` on packets that
+    /// begin a rectangle, exactly as the builder derives them. Returns the
+    /// bytes written.
     pub fn frame(
         &mut self,
         x: u16,
         y: u16,
         w: u16,
         h: u16,
-        pixel: impl Fn(usize) -> &'static [u8],
+        stride: usize,
+        pixels: &[u8],
     ) -> Result<usize> {
-        let heads = dl3::fragment(&mut self.seq, x, y, w, h, self.max_payload);
+        let bytes = self.rect(x, y, w, h, stride, pixels)?;
+        self.frame_no = self.frame_no.wrapping_add(1);
+        Ok(bytes)
+    }
+
+    /// Ship only the tiles that changed since the previous call, and return
+    /// what was sent.
+    ///
+    /// The first call (or a call after a resolution change) ships the frame
+    /// whole. A frame identical to the previous one sends nothing at all, so
+    /// the receiver keeps showing what it already has. Otherwise each damage
+    /// rect from [`DirtyTracker`] goes out as its own burst of DL3 packets.
+    ///
+    /// This is the bandwidth lever the vendor gets from its h264 encoder
+    /// without the encoder: a static desktop costs zero bytes instead of a
+    /// full BGRA frame, and a moving window costs its tiles.
+    pub fn frame_dirty(
+        &mut self,
+        tracker: &mut DirtyTracker,
+        stride: usize,
+        pixels: &[u8],
+    ) -> Result<(Damage, usize)> {
+        let damage = tracker.diff(pixels, stride);
+        let mut bytes = 0usize;
+        for rect in &damage.rects {
+            bytes += self.rect(
+                rect.x as u16,
+                rect.y as u16,
+                rect.w as u16,
+                rect.h as u16,
+                stride,
+                pixels,
+            )?;
+        }
+        // An unchanged frame ships nothing, so the id stays with the last frame
+        // the dock actually received instead of skipping over a gap.
+        if !damage.is_empty() {
+            self.frame_no = self.frame_no.wrapping_add(1);
+        }
+        Ok((damage, bytes))
+    }
+
+    /// Pack one pixel rect tightly and ship it. Every packet of the burst
+    /// shares this frame id; `frame` and `frame_dirty` bump it once per frame.
+    fn rect(
+        &mut self,
+        x: u16,
+        y: u16,
+        w: u16,
+        h: u16,
+        stride: usize,
+        pixels: &[u8],
+    ) -> Result<usize> {
+        if w == 0 || h == 0 {
+            return Ok(0);
+        }
+        const BPP: usize = 4;
+        let (wf, hf) = (w as usize, h as usize);
+        let mut packed = Vec::with_capacity(wf * hf * BPP);
+        for row in 0..hf {
+            let at = (y as usize + row) * stride + x as usize * BPP;
+            if at + wf * BPP > pixels.len() {
+                bail!("frame rect runs past the {stride}-byte buffer");
+            }
+            packed.extend_from_slice(&pixels[at..at + wf * BPP]);
+        }
+        let mut heads = dl3::fragment(x, y, w, h, self.max_payload.max(1));
         let mut bytes_sent = 0;
-        for (i, head) in heads.iter().enumerate() {
-            let payload = pixel(i);
-            let len = payload.len().min(head.len as usize);
-            let mut packet = Vec::with_capacity(dl3::HEADER_LEN + len);
-            let mut h = *head;
-            h.len = len as u16;
-            h.write(&mut packet);
-            packet.extend_from_slice(&payload[..len]);
+        let mut offset = 0usize;
+        for head in heads.iter_mut() {
+            let take = head.len as usize;
+            head.counter = self.counter;
+            head.frame = self.frame_no;
+            let mut packet = Vec::with_capacity(dl3::HEADER_LEN + take);
+            head.write(&mut packet);
+            packet.extend_from_slice(&packed[offset..offset + take]);
             self.write(&packet)?;
             bytes_sent += packet.len();
+            self.counter = self.counter.wrapping_add(1);
+            offset += take;
         }
         Ok(bytes_sent)
     }
@@ -336,5 +440,37 @@ mod tests {
     #[test]
     fn vendor_id_matches_synaptics() {
         assert_eq!(VENDOR_ID, 0x17e9);
+    }
+
+    /// Replays what `frame` would push for a pixel buffer, so geometry and
+    /// stride handling are checked without a dock. Returns (offset, len).
+    fn tiles(w: u16, h: u16, cap: usize) -> Vec<(usize, usize)> {
+        let total = w as usize * h as usize * 4;
+        let mut out = Vec::new();
+        let mut at = 0;
+        while at < total {
+            let take = (total - at).min(cap);
+            out.push((at, take));
+            at += take;
+        }
+        out
+    }
+
+    #[test]
+    fn frame_tiles_cover_the_rectangle_once() {
+        // 40x24 with a 4096-byte cap ships one packet per tile row; the whole
+        // span must be covered exactly once.
+        let t = tiles(40, 24, 4096);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0], (0, 40 * 24 * 4));
+    }
+
+    #[test]
+    fn frame_splits_oversized_tiles() {
+        let t = tiles(16, 16, 100);
+        assert_eq!(t.len(), 11);
+        assert!(t.iter().all(|(_, n)| *n <= 100));
+        assert_eq!(t.iter().map(|(_, n)| n).sum::<usize>(), 16 * 16 * 4);
+        assert_eq!(t[1].0, 100);
     }
 }
