@@ -6,10 +6,31 @@
 use anyhow::Context;
 use anyhow::Result;
 use neolink_core::{
-    agent, dfu, diff::DirtyTracker, displays, dl3, layout, loginitem, spkg, transport, vendor,
-    virtual_display,
+    agent, dfu, diff::DirtyTracker, displays, dl3, h264, layout, loginitem, spkg, transport,
+    vendor, virtual_display,
 };
 use std::time::Duration;
+
+/// Split `frame`'s arguments into positional values and the codec, which may
+/// appear as `--codec X` or `--codec=X` anywhere.
+fn frame_args() -> Result<(Vec<String>, h264::Codec)> {
+    let mut positional = Vec::new();
+    let mut codec = h264::Codec::Raw;
+    let mut args = std::env::args().skip(2);
+    while let Some(arg) = args.next() {
+        if let Some(name) = arg.strip_prefix("--codec=") {
+            codec =
+                h264::Codec::parse(name).context(format!("unknown codec {name:?} (raw|h264)"))?;
+        } else if arg == "--codec" {
+            let name = args.next().context("--codec needs a value (raw|h264)")?;
+            codec =
+                h264::Codec::parse(&name).context(format!("unknown codec {name:?} (raw|h264)"))?;
+        } else {
+            positional.push(arg);
+        }
+    }
+    Ok((positional, codec))
+}
 
 fn usage() -> ! {
     eprintln!(
@@ -28,7 +49,8 @@ fn usage() -> ! {
          \x20 neolinkctl pack F            parse a vendor .spkg and list its frames\n\
          \x20 neolinkctl pack F --out D   write F's firmware image to D\n\
          \x20 neolinkctl flash F [--force]  DFU-flash a .spkg/.fullrom to the dock\n\
-         \x20 neolinkctl frame [ID] [N]   capture a display and ship N frames\n\
+         \x20 neolinkctl frame [ID] [N] [--codec raw|h264]\n\
+         \x20                           capture a display and ship N frames\n\
          \x20 neolinkctl login on|off|status\n\
          \x20 neolinkctl loginscreen on|off|status\n"
     );
@@ -327,9 +349,10 @@ fn main() -> Result<()> {
             }
         }
         Some("frame") => {
-            let want = std::env::args().nth(2).and_then(|a| a.parse::<u32>().ok());
-            let count = std::env::args()
-                .nth(3)
+            let (positional, codec) = frame_args()?;
+            let want = positional.first().and_then(|a| a.parse::<u32>().ok());
+            let count = positional
+                .get(1)
                 .and_then(|a| a.parse::<usize>().ok())
                 .unwrap_or(1);
             let id = match want {
@@ -341,7 +364,13 @@ fn main() -> Result<()> {
                     .context("no main display")?,
             };
             let mut t = transport::Transport::open()?;
-            println!("dock {} max payload {} bytes", t.desc.bus_id, t.max_payload);
+            t.set_codec(codec);
+            println!(
+                "dock {} max payload {} bytes, codec {}",
+                t.desc.bus_id,
+                t.max_payload,
+                codec.name()
+            );
             let mut tracker: Option<DirtyTracker> = None;
             let mut full_bytes = 0usize;
             let mut diff_bytes = 0usize;

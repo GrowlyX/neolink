@@ -118,6 +118,35 @@ zero, i.e. on the first packet of each rectangle. A continuation sets `cont`,
 increments the index, and moves the previous rect's `x_end` into `x` so the
 receiver resumes mid-row.
 
+### There is no codec/format byte
+
+This was checked specifically before writing an encoder, and it is the reason
+the H.264 path is opt-in rather than a replacement for BGRA.
+
+- The whole header is accounted for by the table above. `0x1001271dc` (the
+  builder behind `0x1001270bc`) writes a zero into the "codec class" byte and
+  then ORs only `op & 0xe0` into the tag; the continuation builder
+  `0x10012764c` does the same. No spare field survives.
+- The validator `0x100103148` only checks the tag (`0x01` or `0x40`) and the
+  length; it has no format branch to switch on.
+- The low two tag bits (`stream`) are *carried over* across a burst with
+  `bfxil w8, w9, #0, #2` instead of being derived from the payload, so they are
+  not a per-payload codec selector either.
+- Status ops are exactly `Edid 0x00`, `EdidExtension 0x02`, `Mode 0x05`,
+  `Attributes 0x06` — there is no codec/stream-type op to announce one.
+- The vendor's own codec ids never reach the wire intact. Two id→wire tables
+  exist, `0x10047c7d0` = `[0,1,1,2,1]` (5 entries) and `0x10047c7e4` =
+  `[0,0,1,2,1,1,0,2]` (8 entries); a codec object is 256 bytes and `codec == 4`
+  is special-cased. The encoder has no `VTCompressionSession` import — it is
+  Metal/IOSurface plus `nivo::dl3::encoder`/`codec`/`ifb`, with `Cfb`
+  (compressed framebuffer) and `Ifb` (in-place framebuffer) naming.
+
+So the payload format is negotiated out of band, and the receiver must already
+be in a matching mode. Neolink therefore keeps raw BGRA as the default and puts
+H.264 behind `--codec h264`. **The format contract is not measured**: whether
+the vendor's receiver decodes an Annex-B access unit per tile rect, and how it
+would be switched, is still unverified without a dock.
+
 ## HDCP 2.x
 
 Status ops are `Edid 0x00`, `EdidExtension 0x02`, `Mode 0x05`,

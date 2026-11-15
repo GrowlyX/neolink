@@ -3,6 +3,7 @@ pub mod dfu;
 pub mod diff;
 pub mod displays;
 pub mod dl3;
+pub mod h264;
 pub mod hdcp;
 pub mod layout;
 pub mod loginitem;

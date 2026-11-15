@@ -355,7 +355,12 @@ pub fn checksum(data: &[u8]) -> u16 {
 /// resumed on (`0x1001271d4`), so the rect start tracks the offset too.
 pub fn fragment(x: u16, y: u16, w: u16, h: u16, chunk: usize) -> Vec<Header> {
     const BPP: usize = 4;
-    let total = w as usize * h as usize * BPP;
+    fragment_len(x, y, w, h, w as usize * h as usize * BPP, chunk)
+}
+
+/// Same as [`fragment`] but for a payload whose length is not `w * h * 4`,
+/// which is what a compressed rectangle needs.
+pub fn fragment_len(x: u16, y: u16, w: u16, h: u16, total: usize, chunk: usize) -> Vec<Header> {
     let mut out = Vec::new();
     let mut counter = 0u16;
     let mut done = 0usize;

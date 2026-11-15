@@ -11,6 +11,7 @@
 
 use crate::diff::{Damage, DirtyTracker};
 use crate::dl3::{self, Header, Op, StatusOp};
+use crate::h264::{Codec, EncoderPool};
 use anyhow::{anyhow, bail, Context, Result};
 use nusb::transfer::{Bulk, In, Out};
 use nusb::{DeviceInfo, MaybeFuture};
@@ -108,6 +109,10 @@ pub struct Transport {
     frame_no: u32,
     pub desc: DeviceDesc,
     pub max_payload: usize,
+    codec: Codec,
+    /// Encoders kept warm per rectangle size: a VideoToolbox session is fixed to
+    /// one size and damage rects vary frame to frame.
+    encoders: EncoderPool,
 }
 
 impl std::fmt::Debug for Transport {
@@ -164,6 +169,8 @@ impl Transport {
             frame_no: 0,
             desc,
             max_payload,
+            codec: Codec::Raw,
+            encoders: EncoderPool::default(),
         };
         transport.handshake()?;
         Ok(transport)
@@ -316,6 +323,19 @@ impl Transport {
         Ok(self.attributes()?.hdcp22)
     }
 
+    /// Select the payload format. Raw is the default; H.264 is opt-in because
+    /// the packet header carries no format flag (see [`crate::h264`]).
+    pub fn set_codec(&mut self, codec: Codec) {
+        if self.codec != codec {
+            self.codec = codec;
+            self.encoders.clear();
+        }
+    }
+
+    pub fn codec(&self) -> Codec {
+        self.codec
+    }
+
     /// Message name for an HDCP 2.x id, so a receiver log can be read.
     pub fn hdcp_name(id: u8) -> &'static str {
         dl3::HdcpMessage::name(id)
@@ -404,17 +424,8 @@ impl Transport {
         if w == 0 || h == 0 {
             return Ok(0);
         }
-        const BPP: usize = 4;
-        let (wf, hf) = (w as usize, h as usize);
-        let mut packed = Vec::with_capacity(wf * hf * BPP);
-        for row in 0..hf {
-            let at = (y as usize + row) * stride + x as usize * BPP;
-            if at + wf * BPP > pixels.len() {
-                bail!("frame rect runs past the {stride}-byte buffer");
-            }
-            packed.extend_from_slice(&pixels[at..at + wf * BPP]);
-        }
-        let mut heads = dl3::fragment(x, y, w, h, self.max_payload.max(1));
+        let payload = rect_payload(self.codec, &mut self.encoders, (x, y, w, h), stride, pixels)?;
+        let mut heads = dl3::fragment_len(x, y, w, h, payload.len(), self.max_payload.max(1));
         let mut bytes_sent = 0;
         let mut offset = 0usize;
         for head in heads.iter_mut() {
@@ -423,13 +434,41 @@ impl Transport {
             head.frame = self.frame_no;
             let mut packet = Vec::with_capacity(dl3::HEADER_LEN + take);
             head.write(&mut packet);
-            packet.extend_from_slice(&packed[offset..offset + take]);
+            packet.extend_from_slice(&payload[offset..offset + take]);
             self.write(&packet)?;
             bytes_sent += packet.len();
             self.counter = self.counter.wrapping_add(1);
             offset += take;
         }
         Ok(bytes_sent)
+    }
+}
+
+/// Copy a rect out of a padded BGRA frame and return the bytes that go on the
+/// wire: the tight BGRA itself for [`Codec::Raw`], or one intra keyframe of
+/// H.264 for [`Codec::H264`]. Split out from [`Transport::rect`] so the payload
+/// shape can be tested without a dock attached.
+fn rect_payload(
+    codec: Codec,
+    encoders: &mut EncoderPool,
+    rect: (u16, u16, u16, u16),
+    stride: usize,
+    pixels: &[u8],
+) -> Result<Vec<u8>> {
+    const BPP: usize = 4;
+    let (x, y, w, h) = rect;
+    let (wf, hf) = (w as usize, h as usize);
+    let mut packed = Vec::with_capacity(wf * hf * BPP);
+    for row in 0..hf {
+        let at = (y as usize + row) * stride + x as usize * BPP;
+        if at + wf * BPP > pixels.len() {
+            bail!("frame rect runs past the {stride}-byte buffer");
+        }
+        packed.extend_from_slice(&pixels[at..at + wf * BPP]);
+    }
+    match codec {
+        Codec::Raw => Ok(packed),
+        Codec::H264 => Ok(encoders.get(w, h)?.encode(&packed)?.bytes),
     }
 }
 
@@ -463,6 +502,87 @@ mod tests {
         let t = tiles(40, 24, 4096);
         assert_eq!(t.len(), 1);
         assert_eq!(t[0], (0, 40 * 24 * 4));
+    }
+
+    /// Padded BGRA: 6 px of stride for a 4 px rect, so a leak of row padding
+    /// would show up as the wrong payload length.
+    fn padded(w: u16, h: u16, stride: usize) -> Vec<u8> {
+        let mut v = vec![0u8; stride * h as usize];
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let at = y * stride + x * 4;
+                v[at..at + 4].copy_from_slice(&[x as u8, y as u8, 7, 0xff]);
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn raw_payload_is_the_tight_rows() {
+        let (w, h, stride) = (4u16, 3u16, 24);
+        let frame = padded(w, h, stride);
+        let mut enc = EncoderPool::default();
+        let out = rect_payload(Codec::Raw, &mut enc, (0, 0, w, h), stride, &frame).unwrap();
+        assert_eq!(out.len(), w as usize * h as usize * 4);
+        assert_eq!(out[..4], [0, 0, 7, 0xff]);
+        assert_eq!(out[16..20], [0, 1, 7, 0xff]);
+        assert!(enc.sizes().is_empty());
+    }
+
+    /// The compressed path must put a bitstream on the wire, not BGRA: the
+    /// payload has to be a self-contained Annex-B keyframe and cannot be
+    /// `w * h * 4` bytes for a flat rectangle.
+    #[test]
+    fn h264_payload_replaces_bgra_with_a_keyframe() {
+        let (w, h, stride) = (64u16, 48u16, 64 * 4);
+        let frame = vec![0x40u8; stride * h as usize];
+        let mut enc = EncoderPool::default();
+        let out = rect_payload(Codec::H264, &mut enc, (0, 0, w, h), stride, &frame).unwrap();
+        assert_ne!(out.len(), w as usize * h as usize * 4);
+        assert!(out.starts_with(&[0, 0, 0, 1]), "not Annex-B");
+        assert!(
+            crate::h264::nal_units(&out).iter().any(|(t, _)| *t == 5),
+            "no IDR slice"
+        );
+        // The session is pooled by size: the same rect reuses it, and a
+        // different rect adds a second size rather than dropping the first.
+        assert_eq!(enc.sizes(), [(w, h)]);
+        let first = enc.get(w, h).unwrap().handle_id();
+        rect_payload(Codec::H264, &mut enc, (0, 0, w, h), stride, &frame).unwrap();
+        assert_eq!(enc.get(w, h).unwrap().handle_id(), first);
+        let small = padded(32, 32, stride);
+        rect_payload(Codec::H264, &mut enc, (0, 0, 32, 32), stride, &small).unwrap();
+        assert!(enc.sizes().contains(&(32, 32)));
+        assert_eq!(enc.get(w, h).unwrap().handle_id(), first);
+    }
+
+    /// A one-pixel damage rect is the smallest thing the tracker can emit and
+    /// still has to survive encode + fragmentation.
+    #[test]
+    fn a_single_pixel_h264_rect_ships() {
+        let (w, h, stride) = (8u16, 3u16, 32);
+        let frame = padded(w, h, stride);
+        let mut enc = EncoderPool::default();
+        let out = rect_payload(Codec::H264, &mut enc, (1, 1, 1, 1), stride, &frame).unwrap();
+        let heads = dl3::fragment_len(1, 1, 1, 1, out.len(), 512);
+        assert_eq!(
+            heads.iter().map(|h| h.len as usize).sum::<usize>(),
+            out.len()
+        );
+        assert!(heads[0].first);
+        assert!(out.starts_with(&[0, 0, 0, 1]));
+    }
+
+    #[test]
+    fn h264_payload_splits_by_bitstream_length() {
+        let (w, h, stride) = (96u16, 64u16, 96 * 4);
+        let frame = vec![0x22u8; stride * h as usize];
+        let mut enc = EncoderPool::default();
+        let out = rect_payload(Codec::H264, &mut enc, (0, 0, w, h), stride, &frame).unwrap();
+        let heads = dl3::fragment_len(0, 0, w, h, out.len(), 128);
+        let total: usize = heads.iter().map(|h| h.len as usize).sum();
+        assert_eq!(total, out.len());
+        assert!(heads.len() > 1);
     }
 
     #[test]
